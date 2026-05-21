@@ -8,6 +8,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sqlite3
 import time as _time
 from abc import ABC, abstractmethod
@@ -745,6 +746,798 @@ class KimiParser(BaseParser):
         return out
 
 
+class PiAgentParser(BaseParser):
+    """
+    Parser for pi-agent session files.
+
+    =======================================================================
+    PI-AGENT SESSION FILE SCHEMA
+    =======================================================================
+    Location: ~/.pi/agent/sessions/<encoded-cwd>/<isoTime>_<sessionUUID>.jsonl
+    Override: PI_AGENT_DIR env var — comma-separated list of root dirs.
+
+    Each JSONL file contains one JSON object per line:
+      - type="session"        — first line; ignored for token counting.
+      - type="thinking_level_change" — ignored.
+      - type="model_change"   — tracks current provider + modelId.
+      - type="message"        — assistant messages with usage.
+
+    Token-bearing rows: type="message" with message.role="assistant" and
+    message.usage present. The outer "id" field (8-char hex) is the dedup key.
+
+    Field mapping:
+      source      <- "pi_agent"
+      model       <- message.model (preferred) or last-seen model_change.modelId
+      provider    <- message.provider or last-seen model_change.provider
+      input       <- usage.input
+      output      <- usage.output
+      cacheRead   <- usage.cacheRead
+      cacheWrite  <- usage.cacheWrite
+      reasoning   <- 0 (not exposed)
+      cost        <- usage.cost.total when present & > 0, else pricing DB
+      timestamp   <- outer timestamp (ISO-8601 with Z) → epoch ms
+
+    Dedup key: outer "id" (8-char hex).
+    Totals fallback: if all breakdown tokens are zero but totalTokens > 0,
+    attribute everything to output (matches ccusage apply_total_token_fallback).
+    =======================================================================
+    """
+
+    source_name = "pi_agent"
+
+    def __init__(self, pricing_db: PricingDatabase):
+        super().__init__(pricing_db)
+        pi_dir_env = os.environ.get("PI_AGENT_DIR", "").strip()
+        if pi_dir_env:
+            self.search_dirs = [Path(d.strip()).expanduser() for d in pi_dir_env.split(",") if d.strip()]
+            self.use_rglob = True
+        else:
+            self.search_dirs = [Path.home() / ".pi" / "agent" / "sessions"]
+            self.use_rglob = False
+
+    @staticmethod
+    def _infer_provider(model: str, fallback: str = "") -> str:
+        m = (model or "").lower()
+        if m.startswith("claude"):
+            return "anthropic"
+        if "gemini" in m:
+            return "google"
+        if m.startswith("gpt") or "codex" in m:
+            return "openai"
+        if "minimax" in m or m.startswith("m2.") or m.startswith("m1."):
+            return "minimax"
+        return fallback
+
+    def _file_signatures(self) -> tuple:
+        def scan() -> tuple:
+            sigs: List[Tuple[str, int, int]] = []
+            if self.use_rglob:
+                for d in self.search_dirs:
+                    for p_str, mt, sz in _rglob_sigs(d, "*.jsonl"):
+                        sigs.append((p_str, mt, sz))
+            else:
+                for d in self.search_dirs:
+                    pattern = str(d / "*" / "*.jsonl")
+                    for p_str, mt, sz in _glob_sigs(pattern):
+                        sigs.append((p_str, mt, sz))
+            return tuple(sorted(sigs))
+
+        cache_key = f"pi_agent:{','.join(str(d) for d in self.search_dirs)}"
+        return _timed_sigs(cache_key, scan)
+
+    def _parse_all(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+
+        for path_str, _, _ in self._file_signatures():
+            try:
+                cur_model = ""
+                cur_provider = ""
+                with open(path_str, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        msg_type = obj.get("type")
+
+                        # Track model changes
+                        if msg_type == "model_change":
+                            cur_provider = obj.get("provider") or cur_provider
+                            cur_model = obj.get("modelId") or cur_model
+                            continue
+
+                        if msg_type != "message":
+                            continue
+
+                        msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+                        if msg.get("role") != "assistant":
+                            continue
+                        usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+                        if not usage:
+                            continue
+
+                        # Dedup by outer id
+                        entry_id = obj.get("id")
+                        if entry_id in seen_ids:
+                            continue
+                        if entry_id:
+                            seen_ids.add(entry_id)
+
+                        # Parse timestamp
+                        ts_raw = obj.get("timestamp")
+                        if not ts_raw:
+                            continue
+                        try:
+                            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).astimezone(timezone.utc)
+                        except Exception:
+                            continue
+
+                        model = str(msg.get("model") or cur_model or "unknown")
+                        provider = str(msg.get("provider") or cur_provider or self._infer_provider(model))
+
+                        input_t = self._i(usage.get("input"))
+                        output_t = self._i(usage.get("output"))
+                        cache_r = self._i(usage.get("cacheRead"))
+                        cache_w = self._i(usage.get("cacheWrite"))
+                        total_t = self._i(usage.get("totalTokens"))
+
+                        # Totals fallback: if all breakdowns are zero but totalTokens > 0,
+                        # attribute everything to output (ccusage apply_total_token_fallback).
+                        if input_t == 0 and output_t == 0 and cache_r == 0 and cache_w == 0 and total_t > 0:
+                            output_t = total_t
+
+                        # Skip truly empty rows
+                        if input_t == 0 and output_t == 0 and cache_r == 0 and cache_w == 0:
+                            continue
+
+                        # Cost: prefer usage.cost.total when present and > 0
+                        cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+                        cost_total = float(cost_obj.get("total") or 0.0)
+                        if cost_total > 0:
+                            cost = cost_total
+                        else:
+                            cost = self.pricing_db.get_cost(model, input_t, output_t, cache_r, cache_w)
+
+                        out.append({
+                            "source": self.source_name,
+                            "model": model,
+                            "provider": provider,
+                            "input": input_t,
+                            "output": output_t,
+                            "cacheRead": cache_r,
+                            "cacheWrite": cache_w,
+                            "reasoning": 0,
+                            "cost": cost,
+                            "timestamp": int(ts.timestamp() * 1000),
+                        })
+            except Exception:
+                continue
+
+        return out
+
+
+class CopilotCLIParser(BaseParser):
+    """
+    Parser for GitHub Copilot CLI token usage.
+
+    =======================================================================
+    GITHUB COPILOT CLI — TWO DATA SOURCES
+    =======================================================================
+
+    SOURCE A (preferred): OTel JSONL exporter
+    Location: ~/.copilot/otel/*.jsonl
+              AND the file at COPILOT_OTEL_FILE_EXPORTER_PATH (single file).
+    Note: OTel is opt-in; files may not exist.  Fall through silently.
+
+    Four candidate record types (priority high → low):
+      1. ChatSpan           — span with gen_ai.operation.name="chat" or name starts with "chat "
+      2. InferenceLog       — non-span with event.name="gen_ai.client.inference.operation.details"
+      3. AgentTurnLog       — non-span with event.name="copilot_chat.agent.turn"
+      4. AgentSummarySpan   — span with gen_ai.operation.name="invoke_agent"
+
+    Dedup: OTel-seen traceIds / response_ids prevent double-counting when
+    multiple candidate types cover the same inference call.
+
+    SOURCE B (fallback): events.jsonl
+    Location: ~/.copilot/session-state/*/events.jsonl
+    Contains type="assistant.message" records with outputTokens only.
+    Events whose requestId/messageId appear in the OTel set are suppressed
+    to avoid double-counting.  When in doubt, prefer suppression over
+    double-counting inclusion.
+    =======================================================================
+    """
+
+    source_name = "copilot_cli"
+
+    def __init__(self, pricing_db: PricingDatabase):
+        super().__init__(pricing_db)
+        self.otel_dir = Path.home() / ".copilot" / "otel"
+        self.events_glob = str(Path.home() / ".copilot" / "session-state" / "*" / "events.jsonl")
+
+    @staticmethod
+    def _infer_provider(model: str) -> str:
+        m = (model or "").lower()
+        if m.startswith("claude"):
+            return "anthropic"
+        if m.startswith("gemini"):
+            return "google"
+        if m.startswith("gpt") or re.match(r"^o\d", m) or "chatgpt" in m:
+            return "openai"
+        return "copilot"
+
+    def _file_signatures(self) -> tuple:
+        def scan() -> tuple:
+            sigs = list(_rglob_sigs(self.otel_dir, "*.jsonl"))
+            otel_env = os.environ.get("COPILOT_OTEL_FILE_EXPORTER_PATH", "").strip()
+            if otel_env:
+                try:
+                    s = os.stat(otel_env)
+                    sigs.append((otel_env, int(s.st_mtime_ns), int(s.st_size)))
+                except (FileNotFoundError, OSError):
+                    pass
+            sigs.extend(_glob_sigs(self.events_glob))
+            return tuple(sorted(sigs))
+
+        return _timed_sigs(f"copilot_cli:{self.otel_dir}", scan)
+
+    @staticmethod
+    def _is_span(record: Dict[str, Any]) -> bool:
+        if record.get("type") == "span":
+            return True
+        span_fields = {"spanId", "traceId", "startTime", "endTime", "duration", "kind"}
+        return bool(record.get("name")) and bool(span_fields & set(record.keys()))
+
+    @staticmethod
+    def _attrs(record: Dict[str, Any]) -> Dict[str, Any]:
+        a = record.get("attributes")
+        return a if isinstance(a, dict) else {}
+
+    @staticmethod
+    def _first_nonzero(*values) -> int:
+        for v in values:
+            iv = int(v or 0)
+            if iv:
+                return iv
+        return 0
+
+    @staticmethod
+    def _parse_otel_timestamp(record: Dict[str, Any], file_mtime: float) -> int:
+        """Parse OTel timestamp into epoch ms. Falls back to file mtime."""
+        # Try 2-element array [seconds, nanos] forms
+        for key in ("endTime", "startTime", "hrTime", "_hrTime"):
+            v = record.get(key)
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                try:
+                    return int(int(v[0]) * 1000 + int(v[1]) // 1_000_000)
+                except Exception:
+                    pass
+
+        # Scalar forms: auto-scale based on magnitude.
+        # Thresholds mirror ccusage's copilot::timestamp_from_scalar:
+        #   >= 1e17 → nanoseconds   (current epoch ns ≈ 1.78e18)
+        #   >= 1e14 → microseconds  (current epoch μs ≈ 1.78e15)
+        #   >= 1e11 → milliseconds  (current epoch ms ≈ 1.78e12)
+        #   else    → seconds       (current epoch  s ≈ 1.78e9)
+        # The previous thresholds (>1e15, >1e12) misclassified real
+        # millisecond values like 1748000010500 (~1.748e12) as μs,
+        # divided them by 1000, and landed them in 1970.
+        for key in ("time", "timestamp", "observedTimestamp"):
+            v = record.get(key)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+                if fv >= 1e17:           # nanoseconds → ms
+                    return int(fv // 1_000_000)
+                elif fv >= 1e14:         # microseconds → ms
+                    return int(fv // 1000)
+                elif fv >= 1e11:         # milliseconds (use as-is)
+                    return int(fv)
+                elif fv > 0:             # seconds → ms
+                    return int(fv * 1000)
+            except Exception:
+                pass
+
+        # timeUnixNano
+        v = record.get("timeUnixNano")
+        if v is not None:
+            try:
+                return int(int(v) // 1_000_000)
+            except Exception:
+                pass
+
+        return int(file_mtime * 1000)
+
+    def _parse_otel_tokens(self, attrs: Dict[str, Any]) -> Dict[str, int]:
+        """Extract token counts from OTel span/log attributes."""
+        raw_input = self._i(attrs.get("gen_ai.usage.input_tokens"))
+        cache_r = self._i(attrs.get("gen_ai.usage.cache_read.input_tokens"))
+        cache_w = self._first_nonzero(
+            attrs.get("gen_ai.usage.cache_write.input_tokens"),
+            attrs.get("gen_ai.usage.cache_creation.input_tokens"),
+        )
+        reasoning = self._first_nonzero(
+            attrs.get("gen_ai.usage.reasoning.output_tokens"),
+            attrs.get("gen_ai.usage.reasoning_tokens"),
+        )
+        output_t = self._i(attrs.get("gen_ai.usage.output_tokens"))
+        # NB: gen_ai.usage.input_tokens INCLUDES cache_read; subtract to get fresh input.
+        input_t = max(0, raw_input - cache_r)
+
+        total_t = self._first_nonzero(
+            attrs.get("gen_ai.usage.total_tokens"),
+            attrs.get("gen_ai.usage.total.token_count"),
+        )
+
+        # Totals fallback when parts are missing
+        if input_t == 0 and output_t == 0 and cache_r == 0 and cache_w == 0 and total_t > 0:
+            output_t = total_t
+
+        return {
+            "input": input_t,
+            "output": output_t,
+            "cacheRead": cache_r,
+            "cacheWrite": cache_w,
+            "reasoning": reasoning,
+        }
+
+    @staticmethod
+    def _get_session_id(attrs: Dict[str, Any], record: Dict[str, Any]) -> str:
+        """Extract session ID using priority order from attributes."""
+        for key in (
+            "gen_ai.conversation.id",
+            "copilot_chat.session_id",
+            "copilot_chat.chat_session_id",
+            "session.id",
+            "github.copilot.interaction_id",
+            "gen_ai.response.id",
+        ):
+            v = attrs.get(key)
+            if v:
+                return str(v)
+        trace_id = record.get("traceId")
+        if trace_id:
+            return str(trace_id)
+        return "unknown-session"
+
+    @staticmethod
+    def _get_model(attrs: Dict[str, Any]) -> str:
+        m = attrs.get("gen_ai.response.model") or attrs.get("gen_ai.request.model")
+        return str(m) if m else ""
+
+    def _parse_otel_files(self, otel_paths: List[str]) -> List[Dict[str, Any]]:
+        """Parse all OTel JSONL files and return deduplicated entries."""
+        # Collect records into four candidate buckets
+        chat_spans: List[Dict[str, Any]] = []
+        inference_logs: List[Dict[str, Any]] = []
+        agent_turn_logs: List[Dict[str, Any]] = []
+        agent_summary_spans: List[Dict[str, Any]] = []
+
+        for path_str in otel_paths:
+            try:
+                file_mtime = os.stat(path_str).st_mtime
+            except OSError:
+                file_mtime = 0.0
+            try:
+                with open(path_str, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(rec, dict):
+                            continue
+
+                        rec["_file_mtime"] = file_mtime
+                        attrs = self._attrs(rec)
+                        is_span = self._is_span(rec)
+                        op_name = attrs.get("gen_ai.operation.name", "")
+                        rec_name = str(rec.get("name") or "")
+                        event_name = attrs.get("event.name", "")
+                        body = str(rec.get("body") or "")
+
+                        if is_span and (op_name == "chat" or rec_name.startswith("chat ")):
+                            chat_spans.append(rec)
+                        elif not is_span and (
+                            event_name == "gen_ai.client.inference.operation.details"
+                            or body.startswith("GenAI inference:")
+                        ):
+                            inference_logs.append(rec)
+                        elif not is_span and (
+                            event_name == "copilot_chat.agent.turn"
+                            or body.startswith("copilot_chat.agent.turn")
+                        ):
+                            agent_turn_logs.append(rec)
+                        elif is_span and (op_name == "invoke_agent" or rec_name.startswith("invoke_agent ")):
+                            agent_summary_spans.append(rec)
+            except Exception:
+                continue
+
+        out: List[Dict[str, Any]] = []
+        seen_trace_ids: set = set()
+        seen_response_ids: set = set()
+        seen_dedup_keys: set = set()  # for cross-source dedup
+
+        def _extract_ids(rec: Dict[str, Any]):
+            attrs = self._attrs(rec)
+            trace_id = rec.get("traceId") or ""
+            resp_id = attrs.get("gen_ai.response.id") or ""
+            return str(trace_id), str(resp_id)
+
+        def _emit(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            attrs = self._attrs(rec)
+            tokens = self._parse_otel_tokens(attrs)
+            if all(v == 0 for v in tokens.values()):
+                return None
+            model = self._get_model(attrs)
+            if not model:
+                # Try to resolve model from attrs keys
+                for k, v in attrs.items():
+                    if "model" in k and v:
+                        model = str(v)
+                        break
+            file_mtime = rec.pop("_file_mtime", 0.0)
+            ts_ms = self._parse_otel_timestamp(rec, file_mtime)
+            provider = self._infer_provider(model)
+            cost = self.pricing_db.get_cost(model, tokens["input"], tokens["output"], tokens["cacheRead"], tokens["cacheWrite"])
+            return {
+                "source": self.source_name,
+                "model": model or "unknown",
+                "provider": provider,
+                "input": tokens["input"],
+                "output": tokens["output"],
+                "cacheRead": tokens["cacheRead"],
+                "cacheWrite": tokens["cacheWrite"],
+                "reasoning": tokens["reasoning"],
+                "cost": cost,
+                "timestamp": ts_ms,
+            }
+
+        # ChatSpan: always emit
+        for rec in chat_spans:
+            entry = _emit(rec)
+            if entry:
+                out.append(entry)
+                trace_id, resp_id = _extract_ids(rec)
+                if trace_id:
+                    seen_trace_ids.add(trace_id)
+                if resp_id:
+                    seen_response_ids.add(resp_id)
+
+        # InferenceLog: emit only if not already seen
+        for rec in inference_logs:
+            trace_id, resp_id = _extract_ids(rec)
+            if (trace_id and trace_id in seen_trace_ids) or (resp_id and resp_id in seen_response_ids):
+                continue
+            entry = _emit(rec)
+            if entry:
+                out.append(entry)
+                if trace_id:
+                    seen_trace_ids.add(trace_id)
+                if resp_id:
+                    seen_response_ids.add(resp_id)
+
+        # AgentTurnLog: emit only if not already seen
+        for rec in agent_turn_logs:
+            trace_id, resp_id = _extract_ids(rec)
+            if (trace_id and trace_id in seen_trace_ids) or (resp_id and resp_id in seen_response_ids):
+                continue
+            entry = _emit(rec)
+            if entry:
+                out.append(entry)
+                if trace_id:
+                    seen_trace_ids.add(trace_id)
+                if resp_id:
+                    seen_response_ids.add(resp_id)
+
+        # AgentSummarySpan: emit only if not already seen
+        for rec in agent_summary_spans:
+            trace_id, resp_id = _extract_ids(rec)
+            if (trace_id and trace_id in seen_trace_ids) or (resp_id and resp_id in seen_response_ids):
+                continue
+            entry = _emit(rec)
+            if entry:
+                out.append(entry)
+                if trace_id:
+                    seen_trace_ids.add(trace_id)
+                if resp_id:
+                    seen_response_ids.add(resp_id)
+
+        # Record all OTel response IDs for cross-source dedup with events.jsonl
+        for rec in chat_spans + inference_logs + agent_turn_logs + agent_summary_spans:
+            _, resp_id = _extract_ids(rec)
+            if resp_id:
+                seen_dedup_keys.add(resp_id)
+
+        # Attach seen_dedup_keys as an attribute for use by the caller
+        # We encode this into the return list via a sentinel; simpler: return alongside.
+        # Actually we'll store it on self for use in _parse_all.
+        self._otel_seen_keys = seen_dedup_keys  # type: ignore[attr-defined]
+        return out
+
+    def _parse_all(self) -> List[Dict[str, Any]]:
+        # Collect OTel paths
+        otel_paths: List[str] = []
+        for path_str, _, _ in _rglob_sigs(self.otel_dir, "*.jsonl"):
+            otel_paths.append(path_str)
+        otel_env = os.environ.get("COPILOT_OTEL_FILE_EXPORTER_PATH", "").strip()
+        if otel_env and otel_env not in otel_paths:
+            if os.path.isfile(otel_env):
+                otel_paths.append(otel_env)
+
+        self._otel_seen_keys: set = set()  # type: ignore[attr-defined]
+        out: List[Dict[str, Any]] = []
+
+        if otel_paths:
+            out.extend(self._parse_otel_files(otel_paths))
+
+        # SOURCE B: events.jsonl fallback (output-tokens only).
+        # OTel entries take precedence: suppress any events.jsonl entry whose
+        # requestId or messageId was already seen in the OTel pass.
+        # When in doubt, prefer suppression to avoid double-counting.
+        otel_seen = getattr(self, "_otel_seen_keys", set())
+        seen_event_ids: set = set()
+
+        for path_str, _, _ in _glob_sigs(self.events_glob):
+            try:
+                file_mtime = os.stat(path_str).st_mtime
+            except OSError:
+                file_mtime = 0.0
+            try:
+                with open(path_str, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(obj, dict):
+                            continue
+                        if obj.get("type") != "assistant.message":
+                            continue
+
+                        data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+                        msg_id = data.get("messageId") or ""
+                        request_id = data.get("requestId") or ""
+
+                        # Suppress if already covered by OTel data
+                        if msg_id in otel_seen or request_id in otel_seen:
+                            continue
+                        dedup_key = msg_id or request_id
+                        if dedup_key and dedup_key in seen_event_ids:
+                            continue
+                        if dedup_key:
+                            seen_event_ids.add(dedup_key)
+
+                        output_t = self._i(data.get("outputTokens"))
+                        if output_t == 0:
+                            continue
+
+                        model = str(data.get("model") or "unknown")
+
+                        ts_raw = obj.get("timestamp")
+                        if ts_raw:
+                            try:
+                                ts_ms = int(
+                                    datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                                    .astimezone(timezone.utc)
+                                    .timestamp() * 1000
+                                )
+                            except Exception:
+                                ts_ms = int(file_mtime * 1000)
+                        else:
+                            ts_ms = int(file_mtime * 1000)
+
+                        out.append({
+                            "source": self.source_name,
+                            "model": model,
+                            "provider": self._infer_provider(model),
+                            "input": 0,
+                            "output": output_t,
+                            "cacheRead": 0,
+                            "cacheWrite": 0,
+                            "reasoning": 0,
+                            "cost": self.pricing_db.get_cost(model, 0, output_t, 0, 0),
+                            "timestamp": ts_ms,
+                        })
+            except Exception:
+                continue
+
+        return out
+
+
+class HermesParser(BaseParser):
+    """
+    Parser for Hermes agent session database.
+
+    =======================================================================
+    HERMES SESSION DATABASE SCHEMA
+    =======================================================================
+    Location: ~/.hermes/state.db (SQLite)
+    Override: HERMES_HOME env var — comma-separated list of dirs.
+              Each dir contributes its state.db if present.
+
+    Query: SELECT id, model, billing_provider, started_at,
+                  message_count, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens,
+                  reasoning_tokens, estimated_cost_usd, actual_cost_usd
+           FROM sessions
+           WHERE model IS NOT NULL AND TRIM(model) != ''
+
+    One entry per session row.  started_at is a Python float Unix timestamp
+    in seconds; multiply by 1000 for epoch-ms (or treat as-is if > 1e12).
+
+    Cost precedence:
+      1. actual_cost_usd if positive
+      2. estimated_cost_usd if positive
+      3. pricing DB lookup via billing_provider/model, then bare model
+    NOTE: a recorded zero (e.g. ChatGPT Plus subscription) is treated as
+    "no cost recorded" and falls through to pricing-DB calc — it does NOT
+    short-circuit.
+
+    Dedup: by "id" across multiple state.db files.
+
+    Skip rows where all tokens are 0 AND no recorded cost (positive).
+    =======================================================================
+    """
+
+    source_name = "hermes"
+
+    def __init__(self, pricing_db: PricingDatabase):
+        super().__init__(pricing_db)
+        hermes_home_env = os.environ.get("HERMES_HOME", "").strip()
+        if hermes_home_env:
+            self.search_dirs = [Path(d.strip()).expanduser() for d in hermes_home_env.split(",") if d.strip()]
+        else:
+            self.search_dirs = [Path.home() / ".hermes"]
+
+    @staticmethod
+    def _infer_provider(model: str) -> str:
+        m = (model or "").lower()
+        if m.startswith("claude"):
+            return "anthropic"
+        if "gemini" in m:
+            return "google"
+        if m.startswith("gpt") or re.match(r"^o\d", m) or "chatgpt" in m:
+            return "openai"
+        if "minimax" in m or m.startswith("m2.") or m.startswith("m1."):
+            return "minimax"
+        if "kimi" in m or "moonshot" in m:
+            return "moonshotai"
+        return ""
+
+    def _db_paths(self) -> List[Path]:
+        paths = []
+        for d in self.search_dirs:
+            p = d / "state.db"
+            if p.exists():
+                paths.append(p)
+        return paths
+
+    def _file_signatures(self) -> tuple:
+        def scan() -> tuple:
+            sigs: List[Tuple[str, int, int]] = []
+            for p in self._db_paths():
+                try:
+                    s = p.stat()
+                    sigs.append((str(p), s.st_mtime_ns, s.st_size))
+                except (FileNotFoundError, OSError):
+                    pass
+            return tuple(sorted(sigs))
+
+        cache_key = f"hermes:{','.join(str(d) for d in self.search_dirs)}"
+        return _timed_sigs(cache_key, scan)
+
+    def _parse_all(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+
+        for db_path in self._db_paths():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                cur = conn.cursor()
+                try:
+                    cur.execute(
+                        """
+                        SELECT id, model, billing_provider, started_at,
+                               message_count, input_tokens, output_tokens,
+                               cache_read_tokens, cache_write_tokens,
+                               reasoning_tokens, estimated_cost_usd, actual_cost_usd
+                        FROM sessions
+                        WHERE model IS NOT NULL AND TRIM(model) != ''
+                        """
+                    )
+                    rows = cur.fetchall()
+                except Exception:
+                    conn.close()
+                    continue
+                conn.close()
+
+                for row in rows:
+                    try:
+                        (
+                            row_id, model, billing_provider, started_at,
+                            message_count, input_t, output_t,
+                            cache_r, cache_w, reasoning,
+                            estimated_cost, actual_cost,
+                        ) = row
+
+                        # Dedup across multiple state.db files
+                        if row_id in seen_ids:
+                            continue
+                        seen_ids.add(row_id)
+
+                        input_t = self._i(input_t)
+                        output_t = self._i(output_t)
+                        cache_r = self._i(cache_r)
+                        cache_w = self._i(cache_w)
+                        reasoning = self._i(reasoning)
+
+                        actual_cost_f = float(actual_cost or 0.0)
+                        estimated_cost_f = float(estimated_cost or 0.0)
+
+                        # Skip rows with no tokens AND no recorded cost
+                        has_tokens = (input_t + output_t + cache_r + cache_w + reasoning) > 0
+                        has_cost = actual_cost_f > 0 or estimated_cost_f > 0
+                        if not has_tokens and not has_cost:
+                            continue
+
+                        # Timestamp: started_at is seconds; if > 1e12 already in ms.
+                        try:
+                            sa = float(started_at or 0.0)
+                        except (ValueError, TypeError):
+                            sa = 0.0
+                        ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
+
+                        # Cost precedence: actual > estimated > pricing DB.
+                        # A recorded zero is NOT treated as a real zero — fall through.
+                        provider = str(billing_provider or "").strip() or self._infer_provider(str(model or ""))
+                        if actual_cost_f > 0:
+                            cost = actual_cost_f
+                        elif estimated_cost_f > 0:
+                            cost = estimated_cost_f
+                        else:
+                            # Try provider/model first, then bare model
+                            provider_model = f"{provider}/{model}" if provider else str(model or "")
+                            cost = self.pricing_db.get_cost(provider_model, input_t, output_t, cache_r, cache_w)
+                            if cost == 0.0 and provider:
+                                cost = self.pricing_db.get_cost(str(model or ""), input_t, output_t, cache_r, cache_w)
+
+                        out.append({
+                            "source": self.source_name,
+                            "model": str(model or "unknown"),
+                            "provider": provider,
+                            "input": input_t,
+                            "output": output_t,
+                            "cacheRead": cache_r,
+                            "cacheWrite": cache_w,
+                            "reasoning": reasoning,
+                            "cost": cost,
+                            "timestamp": ts_ms,
+                            # Hermes rows are session-level aggregates: one
+                            # entry represents N messages. Propagate the count
+                            # so compute.py credits sessions correctly instead
+                            # of treating each row as a single message.
+                            "messageCount": int(self._i(message_count)),
+                        })
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        return out
+
+
 class CodingToolsUsageTracker:
     """Registry-driven tracker for coding clients."""
 
@@ -762,6 +1555,9 @@ class CodingToolsUsageTracker:
             "gemini_cli": GeminiCLIParser(self.pricing_db),
             "amp": AmpParser(self.pricing_db),
             "kimi": KimiParser(self.pricing_db),
+            "pi_agent": PiAgentParser(self.pricing_db),
+            "copilot_cli": CopilotCLIParser(self.pricing_db),
+            "hermes": HermesParser(self.pricing_db),
         }
 
     def collect(self, since_date: Optional[datetime] = None, until_date: Optional[datetime] = None, sources: Optional[List[str]] = None):
@@ -791,7 +1587,7 @@ def main():
     parser.add_argument("--since", type=str)
     parser.add_argument("--until", type=str)
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--sources", type=str, default="opencode,codex,claude,gemini_cli,amp,kimi")
+    parser.add_argument("--sources", type=str, default="opencode,codex,claude,gemini_cli,amp,kimi,pi_agent,copilot_cli,hermes")
     args = parser.parse_args()
 
     since_date, until_date = _date_range(args)

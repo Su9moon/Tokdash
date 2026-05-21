@@ -6,7 +6,7 @@
 
 # Tokdash
 
-适用于 AI 编程工具（Codex、OpenCode、Claude Code、Gemini CLI、OpenClaw、Kimi CLI 等）的本地 Token 与费用仪表盘。
+适用于 AI 编程工具（Codex、OpenCode、Claude Code、Gemini CLI、OpenClaw、Kimi CLI、pi-agent、GitHub Copilot CLI、Hermes 等）的本地 Token 与费用仪表盘。
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)
@@ -19,9 +19,8 @@
 
 ## 功能特性
 
-- **分层明细**：按 app -> model 展示，并保留完整 Token 精度
-- **多数据源**：本地会话文件 + 可选 `tokscale` 回退
 - **精确 Token 统计**：输入 / 输出 / 缓存 Token 明细
+- **状态栏集成** *[新]*：把实时 Token 使用量挂到 Claude Code（或任何能访问本地 HTTP 端点的 Agent）的状态栏中 — 见[快速开始](#状态栏集成statusline-integration)
 - **自定义日期范围**：Flatpickr 日期选择器 + 快捷按钮（今天、最近 7 天、本月等）
 - **贡献日历**：2D 热力图 + 3D 等距视图，支持 Tokens / Cost / Messages 切换
 - **会话浏览器**：Codex、Claude Code、OpenCode 的逐会话下钻
@@ -62,9 +61,12 @@ Demo 源码：[tokdash/tokdash.github.io](https://github.com/tokdash/tokdash.git
 - **OpenCode**: `~/.local/share/opencode/`
 - **Codex**: `~/.codex/sessions/`
 - **Claude Code**: `~/.claude/projects/`
-- **Gemini CLI**: `~/.gemini/tmp/*/chats/session-*.json`
+- **Gemini CLI**: `~/.gemini/tmp/*/chats/session-*.json` 和 `session-*.jsonl`
 - **OpenClaw**: `~/.openclaw/agents/*/sessions/`
 - **Kimi CLI**: `~/.kimi/sessions/*/*/wire.jsonl`
+- **pi-agent**: `~/.pi/agent/sessions/`（可通过 `PI_AGENT_DIR` 环境变量覆盖，支持逗号分隔的多目录）
+- **GitHub Copilot CLI**: `~/.copilot/otel/`（完整输入/缓存/费用数据，需设置 `COPILOT_OTEL_FILE_EXPORTER_PATH` 启用 OTel 导出）和 `~/.copilot/session-state/*/events.jsonl`（未启用 OTel 时的仅输出 token 回退）
+- **Hermes**: `~/.hermes/state.db`（可通过 `HERMES_HOME` 环境变量覆盖，支持逗号分隔的多目录）
 
 ## 平台支持
 
@@ -185,6 +187,18 @@ Or read the guide yourself, but seriously, let an agent do it.
 curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/openclaw_reporting/AGENTS.md
 ```
 
+### 状态栏集成（Statusline integration）
+
+本地 API 可为编程 Agent（如 Claude Code）提供实时 token/费用状态栏。把下面这段提示词发给你的 Agent：
+
+> *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
+再把 [`docs/API.md`](docs/API.md) 作为参考一起给它，剩下的让 Agent 自行接入即可。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo-statusline.png" alt="Tokdash 状态栏集成示例" width="900" />
+</p>
+
 ## 配置
 
 Tokdash 默认**只监听 localhost**。
@@ -224,6 +238,8 @@ Tokdash 是一个本地 HTTP 服务。常用接口：
 ```bash
 curl 'http://127.0.0.1:55423/api/usage?period=today'
 ```
+
+完整 API 参考：[`docs/API.md`](docs/API.md) — 包含每个端点的请求参数与响应结构。
 
 ## 费用精度说明
 

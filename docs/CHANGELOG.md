@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.3.0 - 2026-05-21
+
+### Added
+- Added support for pi-agent token usage parsing from ~/.pi/agent/sessions/. Override the location via the `PI_AGENT_DIR` env var (comma-separated list of dirs). Captures input/output/cache tokens and per-message cost when present.
+- Added support for Hermes agent token usage parsing from ~/.hermes/state.db. Override the location via the `HERMES_HOME` env var. Reads session-level aggregates including per-session message counts, reasoning tokens, and recorded cost (with pricing-table fallback for subscription-included sessions where Hermes records a zero cost).
+- Added support for GitHub Copilot CLI token usage. Full input/cache/reasoning/cost data is read from OpenTelemetry exporter JSONL at ~/.copilot/otel/ or the file pointed at by `COPILOT_OTEL_FILE_EXPORTER_PATH`. For sessions without OTel enabled, output-only token counts are recovered from ~/.copilot/session-state/*/events.jsonl as a fallback.
+- Added [`docs/API.md`](API.md) — full HTTP API reference for the Tokdash server, intended for building external integrations (e.g. Claude Code statusline items, IDE plugins, custom dashboards).
+
+### Notes
+- To capture full GitHub Copilot CLI usage (input + cache + cost), set `COPILOT_OTEL_FILE_EXPORTER_PATH` in your shell profile before launching the Copilot CLI; e.g. `export COPILOT_OTEL_FILE_EXPORTER_PATH="$HOME/.copilot/otel/usage.jsonl"`. Without this, Tokdash will still surface output-token counts from the local events log.
+- The Sessions tab does not yet support pi-agent, GitHub Copilot CLI, or Hermes — these agents currently appear only in Overview/Stats aggregates. Per-session drill-down is planned for a follow-up.
+- **Statusline integration**: Tokdash's local HTTP API can power a Claude Code (or any other agent) statusline item showing live token/cost stats. Hand your coding agent the prompt below, plus [`docs/API.md`](API.md) for endpoint details:
+  > *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
 ## 0.2.7 - 2026-05-20
 
 ### Added

@@ -88,18 +88,31 @@ def parse_entries_json(data: Dict[str, Any]) -> Dict[str, Any]:
         tokens_out = int(entry.get("output", 0) or 0)
         cache_read = int(entry.get("cacheRead", 0) or 0)
         cache_write = int(entry.get("cacheWrite", 0) or 0)
+        reasoning = int(entry.get("reasoning", 0) or 0)
 
         # Reporting semantics: cacheWrite is billable input (not discounted cache).
         tokens_in = input_raw + cache_write
         tokens_cache = cache_read
-        total_tokens = tokens_in + tokens_out + tokens_cache
+        # Reasoning tokens are billable output for o-series / extended-thinking
+        # models, so they belong in the headline totals (matches ccusage's
+        # `totalTokens` definition and keeps Overview consistent with Stats).
+        total_tokens = tokens_in + tokens_out + tokens_cache + reasoning
 
         # Suppress fully empty rows.
         if total_tokens == 0:
             continue
 
-        # Recompute cost from local pricing DB for consistency.
-        cost = pricing_db.get_cost(full_model_name, input_raw, tokens_out, cache_read, cache_write)
+        # Prefer parser-provided cost when present (pi-agent ships per-message
+        # cost.total in the log; Hermes ships actual_cost_usd / estimated_cost_usd
+        # with subscription-aware precedence). Falling back to pricing-DB recompute
+        # only when the parser couldn't determine cost keeps Overview/API costs
+        # aligned with the per-source semantics and with the Stats tab, which
+        # already trusts entry["cost"].
+        entry_cost = float(entry.get("cost") or 0.0)
+        if entry_cost > 0:
+            cost = entry_cost
+        else:
+            cost = pricing_db.get_cost(full_model_name, input_raw, tokens_out, cache_read, cache_write)
         messages = int(entry.get("messageCount", 0) or 1)
 
         if source not in apps:

@@ -6,7 +6,7 @@
 
 # Tokdash
 
-Local token & cost dashboard for AI coding tools (Codex, OpenCode, Claude Code, Gemini CLI, OpenClaw, Kimi CLI, etc.).
+Local token & cost dashboard for AI coding tools (Codex, OpenCode, Claude Code, Gemini CLI, OpenClaw, Kimi CLI, pi-agent, GitHub Copilot CLI, Hermes, etc.).
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)
@@ -30,6 +30,7 @@ Local token & cost dashboard for AI coding tools (Codex, OpenCode, Claude Code, 
   - [Run in background](#run-in-background)
   - [Updating Tokdash](#updating-tokdash)
   - [OpenClaw digest (scheduled reports)](#openclaw-digest-scheduled-reports)
+  - [Statusline integration](#statusline-integration)
 - [Configuration](#configuration)
 - [Privacy \& security](#privacy--security)
 - [API (local)](#api-local)
@@ -41,9 +42,8 @@ Local token & cost dashboard for AI coding tools (Codex, OpenCode, Claude Code, 
 
 ## Features
 
-- **Hierarchical breakdown**: app -> model with full token precision
-- **Multiple data sources**: local session files + optional `tokscale` fallback
 - **Exact token counts**: Input/Output/Cache token breakdowns
+- **Statusline integration** *[new]*: drop a live token-usage indicator into Claude Code's statusline (or any agent that can hit a local HTTP endpoint) — see [Quick start](#statusline-integration)
 - **Custom date ranges**: Flatpickr date picker + quick range buttons (Today, Last 7 Days, This Month, etc.)
 - **Contribution calendar**: 2D heatmap + 3D isometric view with Tokens/Cost/Messages metrics
 - **Session explorer**: per-session drill-down for Codex, Claude Code, and OpenCode
@@ -88,6 +88,9 @@ Nothing is uploaded; nothing is read from your machine.
 - **Gemini CLI**: `~/.gemini/tmp/*/chats/session-*.json` and `session-*.jsonl`
 - **OpenClaw**: `~/.openclaw/agents/*/sessions/`
 - **Kimi CLI**: `~/.kimi/sessions/*/*/wire.jsonl`
+- **pi-agent**: `~/.pi/agent/sessions/` (override via `PI_AGENT_DIR` env var, comma-separated list of dirs)
+- **GitHub Copilot CLI**: `~/.copilot/otel/` (full input/cache/cost data — set `COPILOT_OTEL_FILE_EXPORTER_PATH` to enable OTel export) and `~/.copilot/session-state/*/events.jsonl` (output-only fallback when OTel is not enabled)
+- **Hermes**: `~/.hermes/state.db` (override via `HERMES_HOME` env var, comma-separated list of dirs)
 
 ## Platform support
 
@@ -207,6 +210,18 @@ Fetch the installation guide and follow it:
 curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/openclaw_reporting/AGENTS.md
 ```
 
+### Statusline integration
+
+The local API can power a statusline item in your coding agent (Claude Code, etc.) showing live token/cost stats. Hand your agent this prompt:
+
+> *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
+Point it at [`docs/API.md`](docs/API.md) for endpoint details and let it wire the rest.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo-statusline.png" alt="Tokdash statusline integration example" width="900" />
+</p>
+
 ## Configuration
 
 Tokdash is **localhost-only by default**.
@@ -245,6 +260,8 @@ Example:
 ```bash
 curl 'http://127.0.0.1:55423/api/usage?period=today'
 ```
+
+Full API reference: [`docs/API.md`](docs/API.md) — schema, parameters, and response shapes for every endpoint.
 
 ## Cost Accuracy Note
 

@@ -373,8 +373,6 @@ def _parse_claude_session_file(path_str: str, _mtime_ns: int, _size: int) -> Opt
             message_id = str(message.get("id") or obj.get("uuid") or "")
             if message_id and message_id in seen_message_ids:
                 continue
-            if message_id:
-                seen_message_ids.add(message_id)
 
             timestamp_ms = _parse_iso_to_ms(obj.get("timestamp"))
             if timestamp_ms is None:
@@ -388,7 +386,12 @@ def _parse_claude_session_file(path_str: str, _mtime_ns: int, _size: int) -> Opt
             output_tokens = int(usage.get("output_tokens", usage.get("output", 0)) or 0)
             total_tokens = input_tokens + cache_read + output_tokens
             if total_tokens == 0:
+                # Zero-token placeholder — don't claim message_id; a later
+                # entry with the same id may carry the real usage.
                 continue
+
+            if message_id:
+                seen_message_ids.add(message_id)
 
             turn_index += 1
             turns.append(

@@ -52,3 +52,59 @@ def test_claude_session_drilldown_reads_all_claude_project_directories(monkeypat
     assert sorted(raw) == ["base-session", "opus-session"]
     assert raw["base-session"]["turns"][0]["tokens_in"] == 11
     assert raw["opus-session"]["turns"][0]["tokens_in"] == 22
+
+
+def _write_claude_session_with_placeholder(root: Path, session_id: str, message_id: str, real_tokens: int) -> None:
+    """Write a session where each assistant turn has a zero-token placeholder
+    followed by the real entry sharing the same ``message.id``. This is the
+    pattern produced by some Claude Code forks (e.g. ``~/.claude-mi``)."""
+    session_dir = root / "projects" / "project"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / f"{session_id}.jsonl"
+
+    def _entry(tokens: int, timestamp: str) -> str:
+        return (
+            "{"
+            f'"sessionId":"{session_id}",'
+            '"cwd":"/work/project",'
+            f'"timestamp":"{timestamp}",'
+            '"message":{'
+            '"role":"assistant",'
+            f'"id":"{message_id}",'
+            '"model":"claude-sonnet-4.5",'
+            f'"usage":{{"input_tokens":{tokens},"output_tokens":{5 if tokens else 0}}}'
+            "}"
+            "}\n"
+        )
+
+    session_file.write_text(
+        _entry(0, "2026-05-19T12:00:00Z") + _entry(real_tokens, "2026-05-19T12:00:01Z"),
+        encoding="utf-8",
+    )
+
+
+def test_claude_parser_keeps_real_entry_when_zero_token_placeholder_shares_message_id(
+    monkeypatch, tmp_path
+):
+    _write_claude_session_with_placeholder(tmp_path / ".claude-mi", "sess-mi", "msg-mi", 42)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+
+    entries = ClaudeParser(PricingDatabase()).collect(None, None)
+
+    assert [entry["input"] for entry in entries] == [42]
+
+
+def test_claude_session_drilldown_keeps_real_entry_when_zero_token_placeholder_shares_message_id(
+    monkeypatch, tmp_path
+):
+    _write_claude_session_with_placeholder(tmp_path / ".claude-mi", "sess-mi", "msg-mi", 42)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    sessions._parse_claude_session_file.cache_clear()
+    sessions._load_claude_sessions.cache_clear()
+
+    raw = sessions._claude_sessions()
+
+    assert "sess-mi" in raw
+    assert raw["sess-mi"]["turns"][0]["tokens_in"] == 42

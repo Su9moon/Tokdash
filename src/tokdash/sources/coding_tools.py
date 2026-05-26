@@ -412,8 +412,6 @@ class ClaudeParser(BaseParser):
                     msg_id = msg.get("id")
                     if msg_id in seen_message_ids:
                         continue
-                    if msg_id:
-                        seen_message_ids.add(msg_id)
 
                     ts_raw = obj.get("timestamp")
                     if not ts_raw:
@@ -428,7 +426,11 @@ class ClaudeParser(BaseParser):
                     cache_r = self._i(usage.get("cache_read_input_tokens", usage.get("cache_read_tokens")))
                     cache_w = self._i(usage.get("cache_creation_input_tokens", usage.get("cache_write_tokens")))
                     if input_t + output_t + cache_r + cache_w == 0:
+                        # Zero-token placeholder — don't claim msg_id so a later
+                        # entry sharing the same id (with real usage) is kept.
                         continue
+                    if msg_id:
+                        seen_message_ids.add(msg_id)
 
                     model = str(msg.get("model") or "unknown")
                     out.append(

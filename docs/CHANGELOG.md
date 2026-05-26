@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.3.2 - 2026-05-26
+
+### Fixed
+- Claude Code sessions from third-party builds that write a zero-token placeholder entry before the real assistant entry (sharing the same `message.id`) are no longer silently dropped. The deduplication step now ignores placeholders so the real usage gets counted. In practice this restores token, cost, and session-count data from `~/.claude-mi` (mimo-v2.5) and `~/.claude-infini` (glm-5.1) installs; the official `~/.claude` build is unaffected.
+
 ## 0.3.1 - 2026-05-25
 
 ### Added

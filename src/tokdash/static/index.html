@@ -2697,6 +2697,25 @@
       scheduleIdle(() => updateCombinedModelsTable(lastCombinedModels));
     }
 
+    // Window key for the data currently displayed, so deferred session loads
+    // (3A) can tell whether cached session responses still match the active range.
+    let sessionsLoadedKey = null;
+    let lastWindowKey = null;
+
+    function windowKeyFor(customDays, dateFrom, dateTo) {
+      if (dateFrom && dateTo) return `${dateFrom}_${dateTo}`;
+      return `p:${customDays ? String(customDays) : 'today'}`;
+    }
+
+    async function fetchSessionsResponses(customDays, dateFrom, dateTo) {
+      const urls = ["codex", "claude", "opencode"].map((tool) =>
+        (dateFrom && dateTo)
+          ? `/api/sessions?tool=${tool}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`
+          : `/api/sessions?tool=${tool}&period=${encodeURIComponent(customDays ? String(customDays) : 'today')}`);
+      const [codex, claude, opencode] = await Promise.all(urls.map((u) => fetch(u).then((r) => r.json())));
+      return { codex, claude, opencode, combined: buildCombinedSessionsData({ codex, claude, opencode }) };
+    }
+
     async function updateDashboard(customDays = null, dateFrom = null, dateTo = null) {
       if (updateInFlight) return;
 
@@ -2710,43 +2729,33 @@
         usageApiUrl = `/api/usage?period=${encodeURIComponent(periodValue)}`;
       }
 
+      const windowKey = windowKeyFor(customDays, dateFrom, dateTo);
+      // 3A: the Overview tab only needs /api/usage. Fetch the 3 heavy /api/sessions
+      // streams only when the Sessions tab is actually open; otherwise defer them
+      // to ensureSessionsLoaded() so a cold page load no longer fans out 4 parses.
+      const wantSessions = isSessionsActive();
+
       updateInFlight = true;
       renderRefreshButton();
 
       try {
-        const sessionUrls = ["codex", "claude", "opencode"].map((tool) => {
-          if (dateFrom && dateTo) {
-            return `/api/sessions?tool=${tool}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`;
-          } else {
-            const periodValue = customDays ? String(customDays) : 'today';
-            return `/api/sessions?tool=${tool}&period=${encodeURIComponent(periodValue)}`;
-          }
-        });
-        const [usageResponse, codexResponse, claudeResponse, opencodeResponse] = await Promise.all([
-          fetch(usageApiUrl),
-          fetch(sessionUrls[0]),
-          fetch(sessionUrls[1]),
-          fetch(sessionUrls[2]),
-        ]);
-
-        const [usageData, codexData, claudeData, opencodeData] = await Promise.all([
-          usageResponse.json(),
-          codexResponse.json(),
-          claudeResponse.json(),
-          opencodeResponse.json(),
-        ]);
-
-        lastUsageResponse = usageData;
-        lastSessionsResponses = {
-          codex: codexData,
-          claude: claudeData,
-          opencode: opencodeData,
-          combined: buildCombinedSessionsData({ codex: codexData, claude: claudeData, opencode: opencodeData }),
-        };
+        const usagePromise = fetch(usageApiUrl).then((r) => r.json());
+        if (wantSessions) {
+          const [usageData, sessions] = await Promise.all([
+            usagePromise,
+            fetchSessionsResponses(customDays, dateFrom, dateTo),
+          ]);
+          lastUsageResponse = usageData;
+          lastSessionsResponses = sessions;
+          sessionsLoadedKey = windowKey;
+        } else {
+          lastUsageResponse = await usagePromise;
+        }
+        lastWindowKey = windowKey;
 
         updateTimestamp();
 
-        if (isOverviewActive()) renderOverviewTab(usageData);
+        if (isOverviewActive()) renderOverviewTab(lastUsageResponse);
         if (isSessionsActive()) renderSessionsTab();
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -2754,6 +2763,24 @@
       } finally {
         updateInFlight = false;
         renderRefreshButton();
+      }
+    }
+
+    // 3A: load session data on demand when the Sessions tab is opened, if the
+    // cached responses don't already match the window of the displayed usage data.
+    async function ensureSessionsLoaded() {
+      if (sessionsLoadedKey === lastWindowKey && hasLoadedSessionResponses()) {
+        renderSessionsTab();
+        return;
+      }
+      const dateFrom = currentStartDate ? formatLocalDateYmd(currentStartDate) : null;
+      const dateTo = currentEndDate ? formatLocalDateYmd(currentEndDate) : null;
+      try {
+        lastSessionsResponses = await fetchSessionsResponses(null, dateFrom, dateTo);
+        sessionsLoadedKey = windowKeyFor(null, dateFrom, dateTo);
+        renderSessionsTab();
+      } catch (error) {
+        console.error('Error fetching sessions:', error);
       }
     }
 
@@ -3889,7 +3916,7 @@
 
         if (tab === 'stats') loadStats();
         if (tab === 'overview' && lastUsageResponse) renderOverviewTab(lastUsageResponse);
-        if (tab === 'sessions' && hasLoadedSessionResponses()) renderSessionsTab();
+        if (tab === 'sessions') ensureSessionsLoaded();
         if (tab === 'pricing' && !pricingDbLoaded) loadPricingDb();
       });
     });
@@ -5340,6 +5367,11 @@
     currentStartDate = today;
     currentEndDate = today;
     updateDashboardByDateRange(today, today);
+
+    // 3B: warm the Stats response in the background so the first Stats-tab open is
+    // instant. Server-side startup warming (TOKDASH_WARM_ON_START) usually covers
+    // this; this also re-warms after the cache TTL. Fire-and-forget; never blocks UI.
+    setTimeout(() => { fetch('/api/stats').catch(() => {}); }, 1500);
   </script>
 </body>
 </html>

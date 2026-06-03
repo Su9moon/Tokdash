@@ -50,3 +50,6 @@ docs/agents/release/release.py
 
 # Generated/disposable artifacts (sanity snapshots, etc.)
 output/
+
+# Local-only analysis & planning notes (machine-specific usage data; not for the public repo)
+docs/local/

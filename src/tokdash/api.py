@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from contextlib import asynccontextmanager
 from datetime import datetime
 from json import JSONDecodeError
 from pathlib import Path
@@ -69,7 +71,38 @@ class NoCacheMiddleware:
         await self.app(scope, receive, send_with_no_cache)
 
 
-app = FastAPI(title="Tokdash")
+def _warm_caches() -> None:
+    """Best-effort background warm so the first user request hits hot caches.
+
+    Populates the parser caches (coding_tools._entry_cache, openclaw._ENTRY_CACHE)
+    and the API response cache for the dashboard's initial loads — Overview (today)
+    and Stats. Without this, the first cold request pays the full multi-second parse.
+    Disable with TOKDASH_WARM_ON_START=0.
+    Failures are swallowed; warming must never crash `serve`.
+    """
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    for key, fetch in (
+        ("usage_today_None_None", lambda: compute_usage_with_comparison("today", None, None)),
+        (
+            f"usage_today_{today}_{today}",
+            lambda: compute_usage_with_comparison("today", today, today),
+        ),
+        ("stats_None", lambda: compute_stats(None)),
+    ):
+        try:
+            get_cached_or_fetch(key, fetch)
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    if os.environ.get("TOKDASH_WARM_ON_START", "1") != "0":
+        threading.Thread(target=_warm_caches, name="tokdash-warm", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Tokdash", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.add_middleware(NoCacheMiddleware)
 

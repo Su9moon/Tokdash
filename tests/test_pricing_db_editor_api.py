@@ -86,3 +86,35 @@ def test_pricing_db_editor_rejects_missing_models_object(tmp_path, monkeypatch):
     else:
         raise AssertionError("Expected missing models object to be rejected")
     assert json.loads(pricing_path.read_text(encoding="utf-8")) == original
+
+
+def test_startup_warmer_populates_initial_overview_date_range(monkeypatch):
+    api._cache.clear()
+    usage_calls = []
+    stats_calls = []
+
+    def fake_usage(period, date_from, date_to):
+        usage_calls.append((period, date_from, date_to))
+        return {"period": period, "date_from": date_from, "date_to": date_to}
+
+    def fake_stats(year):
+        stats_calls.append(year)
+        return {"year": year}
+
+    monkeypatch.setattr(api, "compute_usage_with_comparison", fake_usage)
+    monkeypatch.setattr(api, "compute_stats", fake_stats)
+
+    try:
+        api._warm_caches()
+        assert ("today", None, None) in usage_calls
+        date_range_calls = [call for call in usage_calls if call[1] is not None or call[2] is not None]
+        assert len(date_range_calls) == 1
+
+        period, date_from, date_to = date_range_calls[0]
+        assert period == "today"
+        assert date_from == date_to
+        assert f"usage_today_{date_from}_{date_to}" in api._cache
+        assert "stats_None" in api._cache
+        assert stats_calls == [None]
+    finally:
+        api._cache.clear()

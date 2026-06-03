@@ -100,6 +100,133 @@ def _usage_cost_from_payload(usage: dict) -> float:
     return 0.0
 
 
+# ---------------------------------------------------------------------------
+# File-signature-cached entry parsing
+# ---------------------------------------------------------------------------
+# OpenClaw usage is parsed once per file-signature and filtered by date in
+# memory, mirroring coding_tools.BaseParser. Without this, every /api/usage and
+# /api/stats request re-read ~1 GB of session logs with no cache (the dominant
+# cold-start cost).
+_ENTRY_CACHE: Dict[tuple, List[Dict[str, Any]]] = {}
+_ENTRY_CACHE_MAX = 8
+
+
+def _is_session_transcript(path: str) -> bool:
+    """True for countable OpenClaw transcripts; False for sidecars and snapshot copies.
+
+    The ``*.jsonl*`` glob over-matches. Excludes:
+      - ``*.trajectory.jsonl`` / ``*.acp-stream.jsonl`` — sidecar logs with no usage rows
+      - ``*.checkpoint.*.jsonl`` / ``*.jsonl.bak-*`` — byte-identical snapshot/backup COPIES
+        of the live ``<session>.jsonl``; counting them double-counts every message
+      - ``*.lock``
+    Keeps the live ``<session>.jsonl`` plus the disjoint ``*.jsonl.reset.*`` /
+    ``*.jsonl.deleted.*`` archives (renamed, never coexisting with their live file).
+    """
+    base = os.path.basename(path)
+    if base.endswith(".lock"):
+        return False
+    if base.endswith(".trajectory.jsonl") or base.endswith(".acp-stream.jsonl"):
+        return False
+    if ".checkpoint." in base or ".jsonl.bak" in base:
+        return False
+    return True
+
+
+def _session_files(session_dirs: list[str]) -> list[str]:
+    files: list[str] = []
+    for d in session_dirs:
+        for f in glob.glob(os.path.join(d, "*.jsonl*")):
+            if _is_session_transcript(f):
+                files.append(f)
+    files.sort()  # deterministic dedup order
+    return files
+
+
+def _signature(files: list[str]) -> tuple:
+    items: List[tuple] = []
+    for f in files:
+        try:
+            s = os.stat(f)
+            items.append((f, s.st_mtime_ns, s.st_size))
+        except OSError:
+            continue
+    return tuple(items)  # already path-sorted
+
+
+def _parse_entries(files: list[str]) -> List[Dict[str, Any]]:
+    """Parse countable assistant-usage messages, deduped by top-level ``id``.
+
+    OpenClaw writes a unique top-level ``id`` per message; deduping by it makes the
+    parse idempotent against any residual snapshot overlap (snapshot files are already
+    excluded by ``_is_session_transcript``) and mirrors ``ClaudeParser``. Rows carry raw
+    token fields only — cost is computed at aggregation time so a pricing-DB edit takes
+    effect without re-parsing.
+    """
+    out: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for filepath in files:
+        for entry in parse_session_file(filepath):
+            if entry.get("type") != "message":
+                continue
+            message = entry.get("message", {})
+            if message.get("role") != "assistant":
+                continue
+            usage = message.get("usage", {})
+            if not usage:
+                continue
+
+            entry_id = entry.get("id")
+            if entry_id:
+                if entry_id in seen_ids:
+                    continue
+                seen_ids.add(entry_id)
+
+            msg_dt = _resolve_usage_datetime(entry, message, filepath)
+            if not msg_dt:
+                continue
+            if msg_dt.tzinfo is None:
+                msg_dt = msg_dt.replace(tzinfo=timezone.utc)
+
+            provider = message.get("provider") or "unknown"
+            model_id = message.get("model", "unknown")
+
+            input_raw = _i(usage.get("input", 0) or usage.get("inputTokens", 0) or 0)
+            cache_write = _i(usage.get("cacheWrite", 0) or usage.get("cacheWriteTokens", 0) or 0)
+            output = _i(usage.get("output", 0) or usage.get("outputTokens", 0) or 0)
+            cache_read = _i(usage.get("cacheRead", 0) or usage.get("cacheReadTokens", 0) or 0)
+            if input_raw + cache_write + output + cache_read <= 0:
+                continue
+
+            model = f"{provider}/{model_id}" if provider not in (None, "", "unknown") else str(model_id)
+
+            out.append(
+                {
+                    "msg_dt": msg_dt,
+                    "model": model,
+                    "input_raw": input_raw,
+                    "cache_write": cache_write,
+                    "output": output,
+                    "cache_read": cache_read,
+                    "payload_cost": _usage_cost_from_payload(usage),
+                }
+            )
+    return out
+
+
+def _collect_entries(session_dirs: list[str]) -> List[Dict[str, Any]]:
+    """Return parsed+deduped entries for *session_dirs*, cached by file signature."""
+    files = _session_files(session_dirs)
+    sig = _signature(files)
+    cached = _ENTRY_CACHE.get(sig)
+    if cached is not None:
+        return cached
+    entries = _parse_entries(files)
+    if len(_ENTRY_CACHE) >= _ENTRY_CACHE_MAX:
+        _ENTRY_CACHE.clear()
+    _ENTRY_CACHE[sig] = entries
+    return entries
+
+
 def get_session_usage(
     sessions_dir: str | list[str],
     since_date: Optional[datetime] = None,
@@ -144,96 +271,53 @@ def get_session_usage(
     total_messages = 0
 
     session_dirs = sessions_dir if isinstance(sessions_dir, list) else [sessions_dir]
-    files: list[str] = []
-    for d in session_dirs:
-        # Include:
-        # - <session>.jsonl
-        # - <session>.jsonl.reset.<timestamp>
-        # - <session>.jsonl.deleted.<timestamp>
-        # - <session>.checkpoint.<ckpt_id>.jsonl
-        # Exclude:
-        # - <session>.jsonl.lock
-        all_files = glob.glob(os.path.join(d, "*.jsonl*"))
-        for f in all_files:
-            base = os.path.basename(f)
-            if base.endswith(".lock"):
-                continue
-            files.append(f)
+    entries = _collect_entries(session_dirs)
 
-    for filepath in files:
-        try:
-            mtime = datetime.fromtimestamp(os.path.getmtime(filepath), timezone.utc)
-            if since_date and mtime < since_date:
-                continue
-        except Exception:
+    for e in entries:
+        msg_dt = e["msg_dt"]
+        if since_date and msg_dt < since_date:
+            continue
+        if until_date and msg_dt > until_date:
             continue
 
-        entries = parse_session_file(filepath)
+        model = e["model"]
+        tokens_input_raw = e["input_raw"]
+        tokens_cache_write = e["cache_write"]
+        tokens_in = tokens_input_raw + tokens_cache_write
 
-        for entry in entries:
-            if entry.get("type") != "message":
-                continue
+        tokens_out = e["output"]
+        tokens_cache_read = e["cache_read"]
+        tokens_cache = tokens_cache_read
+        tokens_total = tokens_in + tokens_out + tokens_cache
+        # Prefer recomputed cost from local pricing DB (fall back to provider payload).
+        cost_db = pricing_db.get_cost(model, tokens_input_raw, tokens_out, tokens_cache_read, tokens_cache_write)
+        cost = cost_db if cost_db > 0.0 else e["payload_cost"]
+        msg_date = msg_dt.astimezone().strftime("%Y-%m-%d")
 
-            message = entry.get("message", {})
-            if message.get("role") != "assistant":
-                continue
+        total_messages += 1
 
-            msg_dt = _resolve_usage_datetime(entry, message, filepath)
-            if not msg_dt:
-                continue
-            if msg_dt.tzinfo is None:
-                msg_dt = msg_dt.replace(tzinfo=timezone.utc)
+        stats = model_stats[model]
+        stats["tokens_in"] += tokens_in
+        stats["tokens_out"] += tokens_out
+        stats["tokens_cache"] += tokens_cache
+        stats["cost"] += cost
+        stats["messages"] += 1
 
-            if since_date and msg_dt < since_date:
-                continue
-            if until_date and msg_dt > until_date:
-                continue
+        day = daily_contribs[msg_date]
+        day["tokens_in"] += tokens_in
+        day["tokens_out"] += tokens_out
+        day["tokens_cacheRead"] += tokens_cache
+        day["tokens_total"] += tokens_total
+        day["cost"] += cost
+        day["messages"] += 1
 
-            usage = message.get("usage", {})
-            if not usage:
-                continue
-
-            provider = message.get("provider") or "unknown"
-            model_id = message.get("model", "unknown")
-            model = f"{provider}/{model_id}" if provider not in (None, "", "unknown") else str(model_id)
-
-            tokens_input_raw = _i(usage.get("input", 0) or usage.get("inputTokens", 0) or 0)
-            tokens_cache_write = _i(usage.get("cacheWrite", 0) or usage.get("cacheWriteTokens", 0) or 0)
-            tokens_in = tokens_input_raw + tokens_cache_write
-
-            tokens_out = _i(usage.get("output", 0) or usage.get("outputTokens", 0) or 0)
-            tokens_cache_read = _i(usage.get("cacheRead", 0) or usage.get("cacheReadTokens", 0) or 0)
-            tokens_cache = tokens_cache_read
-            tokens_total = tokens_in + tokens_out + tokens_cache
-            # Prefer recomputed cost from local pricing DB (fall back to provider payload).
-            cost_db = pricing_db.get_cost(model, tokens_input_raw, tokens_out, tokens_cache_read, tokens_cache_write)
-            cost = cost_db if cost_db > 0.0 else _usage_cost_from_payload(usage)
-            msg_date = msg_dt.astimezone().strftime("%Y-%m-%d")
-
-            total_messages += 1
-
-            stats = model_stats[model]
-            stats["tokens_in"] += tokens_in
-            stats["tokens_out"] += tokens_out
-            stats["tokens_cache"] += tokens_cache
-            stats["cost"] += cost
-            stats["messages"] += 1
-
-            day = daily_contribs[msg_date]
-            day["tokens_in"] += tokens_in
-            day["tokens_out"] += tokens_out
-            day["tokens_cacheRead"] += tokens_cache
-            day["tokens_total"] += tokens_total
-            day["cost"] += cost
-            day["messages"] += 1
-
-            day_source = day["sources"][model]
-            day_source["tokens_in"] += tokens_in
-            day_source["tokens_out"] += tokens_out
-            day_source["tokens_cacheRead"] += tokens_cache
-            day_source["tokens_total"] += tokens_total
-            day_source["cost"] += cost
-            day_source["messages"] += 1
+        day_source = day["sources"][model]
+        day_source["tokens_in"] += tokens_in
+        day_source["tokens_out"] += tokens_out
+        day_source["tokens_cacheRead"] += tokens_cache
+        day_source["tokens_total"] += tokens_total
+        day_source["cost"] += cost
+        day_source["messages"] += 1
 
     models: Dict[str, Any] = {}
     total_tokens = 0

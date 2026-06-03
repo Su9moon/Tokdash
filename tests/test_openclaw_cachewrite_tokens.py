@@ -110,11 +110,9 @@ def test_inner_message_timestamp_is_used_for_date_filtering(tmp_path: Path):
     assert result_nov["total_tokens"] == 115
 
 
-def test_archived_and_checkpoint_transcripts_are_included(tmp_path: Path):
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-
-    row = {
+def _ocl_row(mid: str) -> dict:
+    return {
+        "id": mid,
         "type": "message",
         "timestamp": "2026-04-15T00:00:01Z",
         "message": {
@@ -126,14 +124,68 @@ def test_archived_and_checkpoint_transcripts_are_included(tmp_path: Path):
         },
     }
 
-    _write_jsonl(sessions_dir / "base.jsonl", [row])
-    _write_jsonl(sessions_dir / "archived.jsonl.deleted.123", [row])
-    _write_jsonl(sessions_dir / "reset.jsonl.reset.456", [row])
-    _write_jsonl(sessions_dir / "ckpt.checkpoint.789.jsonl", [row])
+
+def test_disjoint_archives_counted_but_snapshot_copies_excluded(tmp_path: Path):
+    """Live + rename-based archives (.reset/.deleted) count; snapshot/backup COPIES don't.
+
+    ``.checkpoint.*`` and ``.jsonl.bak-*`` are byte-identical snapshots of the live
+    transcript and ``.trajectory.jsonl`` carries no usage; counting any of them
+    double-counts (or wastes I/O).
+    """
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+
+    # KEPT — live transcript + disjoint rename-based archives, each a distinct message.
+    _write_jsonl(sessions_dir / "base.jsonl", [_ocl_row("live-1")])
+    _write_jsonl(sessions_dir / "archived.jsonl.deleted.123", [_ocl_row("del-1")])
+    _write_jsonl(sessions_dir / "reset.jsonl.reset.456", [_ocl_row("reset-1")])
+    # EXCLUDED — snapshot/backup copies + sidecar logs.
+    _write_jsonl(sessions_dir / "ckpt.checkpoint.789.jsonl", [_ocl_row("ckpt-1")])
+    _write_jsonl(sessions_dir / "base.jsonl.bak-100-200", [_ocl_row("bak-1")])
+    _write_jsonl(sessions_dir / "sess.trajectory.jsonl", [_ocl_row("traj-1")])
 
     result = get_session_usage(str(sessions_dir))
     model_key = "infini-ai/glm-5.1"
 
-    assert result["total_messages"] == 4
-    assert result["models"][model_key]["messages"] == 4
-    assert result["models"][model_key]["tokens"] == 52
+    # 3 kept files × 1 message each; per message tokens = input 10 + output 2 + cacheRead 1 = 13.
+    assert result["total_messages"] == 3
+    assert result["models"][model_key]["messages"] == 3
+    assert result["models"][model_key]["tokens"] == 39
+
+
+def test_duplicate_top_level_id_is_deduplicated(tmp_path: Path):
+    """A message id appearing in two kept files is counted once (dedup safety net)."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+
+    msg = _ocl_row("dup-1")
+    _write_jsonl(sessions_dir / "base.jsonl", [msg])
+    _write_jsonl(sessions_dir / "old.jsonl.reset.999", [msg])  # same id, kept file
+
+    result = get_session_usage(str(sessions_dir))
+    assert result["total_messages"] == 1
+    assert result["models"]["infini-ai/glm-5.1"]["tokens"] == 13
+
+
+def test_zero_token_assistant_usage_rows_are_ignored(tmp_path: Path):
+    """OpenClaw mirror/runtime rows can carry a usage object with all token fields zero."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+
+    row = _ocl_row("mirror-1")
+    row["message"]["provider"] = "openclaw"
+    row["message"]["model"] = "delivery-mirror"
+    row["message"]["usage"] = {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": {"total": 0},
+    }
+    _write_jsonl(sessions_dir / "base.jsonl", [row])
+
+    result = get_session_usage(str(sessions_dir))
+    assert result["total_messages"] == 0
+    assert result["total_tokens"] == 0
+    assert result["models"] == {}

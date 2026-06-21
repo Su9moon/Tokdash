@@ -17,7 +17,6 @@ import shutil
 import subprocess
 import sys
 import time
-import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -143,14 +142,43 @@ def _maybe_open_dashboard(result: Dict[str, Any], opts: Options, detection: Dict
     url = result.get("url")
     if not url:
         return False
-    try:
-        opened = webbrowser.open(url)
-    except Exception:
-        return False
+    opened = _open_dashboard_url(url)
     if opened:
         result["opened_url"] = url
         result.setdefault("notes", []).append(f"Opened dashboard in your browser: {url}")
     return bool(opened)
+
+
+def _open_dashboard_url(url: str) -> bool:
+    """Open the setup URL without letting browser logs attach to this terminal."""
+    commands: List[List[str]] = []
+    if sys.platform == "darwin" and shutil.which("open"):
+        commands.append(["open", url])
+    elif os.name == "nt":
+        commands.append(["cmd", "/c", "start", "", url])
+    else:
+        if detect.os_kind() == "wsl" and shutil.which("wslview"):
+            commands.append(["wslview", url])
+        if shutil.which("xdg-open"):
+            commands.append(["xdg-open", url])
+        if shutil.which("gio"):
+            commands.append(["gio", "open", url])
+
+    kwargs: Dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if os.name != "nt":
+        kwargs["start_new_session"] = True
+    for cmd in commands:
+        try:
+            subprocess.Popen(cmd, **kwargs)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _offer_tailscale(result: Dict[str, Any]) -> None:

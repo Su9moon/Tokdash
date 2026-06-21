@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 1.0.2 - 2026-06-21
+
+### Fixed
+- Interactive `tokdash setup` now opens the dashboard with a detached platform opener whose stdout/stderr are redirected away from the terminal, preventing Chromium/Chrome GPU, voice, TensorFlow Lite, and GCM logs from appearing after setup completes.
+
 ## 1.0.1 - 2026-06-21
 
 ### Fixed

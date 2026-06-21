@@ -376,6 +376,43 @@ def test_setup_systemd_restart_timeout_fails_closed_when_not_ready(fake_systemd,
     assert paths.manifest_path().exists()
 
 
+def test_setup_open_dashboard_uses_detached_opener(monkeypatch):
+    calls = []
+
+    def fake_which(name):
+        return f"/usr/bin/{name}" if name == "xdg-open" else None
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(engine.sys, "platform", "linux")
+    monkeypatch.setattr(detect, "os_kind", lambda: "linux")
+    monkeypatch.setattr(engine.shutil, "which", fake_which)
+    monkeypatch.setattr(engine.subprocess, "Popen", fake_popen)
+
+    assert engine._open_dashboard_url("http://127.0.0.1:55423") is True
+    cmd, kwargs = calls[0]
+    assert cmd == ["xdg-open", "http://127.0.0.1:55423"]
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+
+
+def test_setup_open_dashboard_records_note(monkeypatch):
+    monkeypatch.setattr(engine, "_has_display", lambda: True)
+    monkeypatch.setattr(engine, "_open_dashboard_url", lambda url: True)
+    result = {"ok": True, "url": "http://127.0.0.1:55423"}
+
+    assert engine._maybe_open_dashboard(result, plan.Options(), {"tty": True}) is True
+    assert result["opened_url"] == "http://127.0.0.1:55423"
+    assert result["notes"] == ["Opened dashboard in your browser: http://127.0.0.1:55423"]
+
+
 def test_setup_overwrites_its_own_marked_unit(fake_systemd):
     # Re-running setup is idempotent: an existing *marked* unit is replaced without --force.
     assert run(["setup", "--auto", "--service", "systemd"]) == 0

@@ -171,6 +171,24 @@ def test_unit_is_managed_detection(tmp_path):
     assert systemd.unit_is_managed(unmarked) is False
 
 
+def test_systemd_lifecycle_commands_allow_service_manager_timeout(monkeypatch):
+    seen = []
+
+    def fake_run(args, timeout=20):
+        seen.append((args, timeout))
+        return _ok_proc()
+
+    monkeypatch.setattr(systemd, "_run", fake_run)
+    systemd.enable_now()
+    systemd.restart()
+    systemd.disable_now()
+    assert seen == [
+        (["enable", "--now", "tokdash"], systemd.LIFECYCLE_TIMEOUT),
+        (["restart", "tokdash"], systemd.LIFECYCLE_TIMEOUT),
+        (["disable", "--now", "tokdash"], systemd.LIFECYCLE_TIMEOUT),
+    ]
+
+
 # --- runtime resolution (ownership matrix §13.1) --------------------------------
 
 
@@ -323,6 +341,39 @@ def test_setup_systemd_restarts_after_writing_unit(fake_systemd, monkeypatch):
     monkeypatch.setattr(systemd, "restart", lambda name="tokdash": restarted.setdefault("proc", _ok_proc()))
     rc = run(["setup", "--auto", "--service", "systemd"])
     assert rc == 0 and restarted.get("proc") is not None
+
+
+def test_setup_systemd_restart_timeout_succeeds_when_service_is_ready(fake_systemd, monkeypatch, capsys):
+    def slow_restart(name="tokdash"):
+        raise subprocess.TimeoutExpired(["systemctl", "--user", "restart", name], 20)
+
+    monkeypatch.setattr(systemd, "restart", slow_restart)
+    rc, payload = run_json(["setup", "--auto", "--service", "systemd", "--json"], capsys)
+    assert rc == 0 and payload["ok"] is True
+    assert "systemctl restart timed out" in payload["service"]["restart_error"]
+    assert payload["readiness"]["ok"] is True
+    assert paths.manifest_path().exists()
+
+
+def test_setup_systemd_restart_timeout_fails_closed_when_not_ready(fake_systemd, monkeypatch, capsys):
+    def slow_restart(name="tokdash"):
+        raise subprocess.TimeoutExpired(["systemctl", "--user", "restart", name], 20)
+
+    monkeypatch.setattr(systemd, "restart", slow_restart)
+    monkeypatch.setattr(
+        engine,
+        "_wait_for_service_ready",
+        lambda bind, port, **k: {
+            "ok": False,
+            "error": "service did not become ready: nothing answered on 127.0.0.1:55423",
+            "port": {"port": port, "open": False, "is_tokdash": False, "version": None},
+        },
+    )
+    rc, payload = run_json(["setup", "--auto", "--service", "systemd", "--json"], capsys)
+    assert rc == 1 and payload["ok"] is False
+    assert "did not become ready" in payload["error"]
+    assert "systemctl restart timed out" in payload["service"]["restart_error"]
+    assert paths.manifest_path().exists()
 
 
 def test_setup_overwrites_its_own_marked_unit(fake_systemd):
@@ -724,6 +775,55 @@ def test_macos_setup_writes_plist_and_manifest(macos, fake_launchd, capsys):
     assert plist.is_file() and "X-Tokdash-Managed" in plist.read_text(encoding="utf-8")
     assert manifest.read_manifest()["service"]["type"] == "launchd"
     assert "service:launchd" in payload["changed"]
+
+
+def test_launchd_lifecycle_commands_allow_service_manager_timeout(macos, monkeypatch, tmp_path):
+    seen = []
+
+    def fake_run(args, timeout=20):
+        seen.append((args, timeout))
+        return _ok_proc()
+
+    monkeypatch.setattr(launchd, "_run", fake_run)
+    plist = tmp_path / "com.tokdash.tokdash.plist"
+    launchd.bootstrap(plist)
+    launchd.kickstart()
+    launchd.bootout()
+    assert seen == [
+        (["bootstrap", f"gui/{launchd._uid()}", str(plist)], launchd.LIFECYCLE_TIMEOUT),
+        (["kickstart", "-k", f"gui/{launchd._uid()}/{launchd.LABEL}"], launchd.LIFECYCLE_TIMEOUT),
+        (["bootout", f"gui/{launchd._uid()}/{launchd.LABEL}"], launchd.LIFECYCLE_TIMEOUT),
+    ]
+
+
+def test_macos_setup_bootstrap_timeout_succeeds_when_service_is_ready(macos, fake_launchd, monkeypatch, capsys):
+    def slow_bootstrap(plist):
+        raise subprocess.TimeoutExpired(["launchctl", "bootstrap"], 20)
+
+    monkeypatch.setattr(launchd, "bootstrap", slow_bootstrap)
+    rc, payload = run_json(["setup", "--auto", "--service", "launchd", "--json"], capsys)
+    assert rc == 0 and payload["ok"] is True
+    assert "launchctl bootstrap timed out" in payload["service"]["start_error"]
+    assert payload["readiness"]["ok"] is True
+    assert paths.manifest_path().exists()
+
+
+def test_macos_setup_bootstrap_error_fails_closed_when_not_ready(macos, fake_launchd, monkeypatch, capsys):
+    monkeypatch.setattr(launchd, "bootstrap", lambda plist: subprocess.CompletedProcess([], 1, "", "boom"))
+    monkeypatch.setattr(
+        engine,
+        "_wait_for_service_ready",
+        lambda bind, port, **k: {
+            "ok": False,
+            "error": "service did not become ready: nothing answered on 127.0.0.1:55423",
+            "port": {"port": port, "open": False, "is_tokdash": False, "version": None},
+        },
+    )
+    rc, payload = run_json(["setup", "--auto", "--service", "launchd", "--json"], capsys)
+    assert rc == 1 and payload["ok"] is False
+    assert "did not become ready" in payload["error"]
+    assert "launchctl bootstrap: boom" in payload["service"]["start_error"]
+    assert paths.manifest_path().exists()
 
 
 def test_macos_setup_refuses_unmarked_plist(macos, fake_launchd):

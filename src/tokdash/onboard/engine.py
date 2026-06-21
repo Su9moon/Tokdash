@@ -246,6 +246,15 @@ def _wait_for_service_ready(bind: str, port: int, *, timeout: float = 8.0) -> Di
         time.sleep(0.25)
 
 
+def _proc_failure_detail(proc: subprocess.CompletedProcess, fallback: str) -> str:
+    detail = (proc.stderr or proc.stdout or "").strip()
+    return detail or fallback
+
+
+def _timeout_detail(action: str, exc: subprocess.TimeoutExpired) -> str:
+    return f"{action} timed out after {exc.timeout} seconds"
+
+
 def _apply_setup(p: Dict[str, Any], opts: Options) -> Dict[str, Any]:
     paths.data_dir().mkdir(parents=True, exist_ok=True)
     rt = dict(p["runtime"])
@@ -280,12 +289,21 @@ def _apply_setup(p: Dict[str, Any], opts: Options) -> Dict[str, Any]:
             # `enable --now` does not necessarily restart an already-running manual
             # tokdash.service after ExecStart changes. Restart so --force migrations and
             # re-runs actually pick up the newly-written unit before readiness probing.
-            restart_proc = systemd.restart()
+            restart_error = None
+            try:
+                restart_proc = systemd.restart()
+            except subprocess.TimeoutExpired as exc:
+                # systemctl can outlive our client-side wait while the service still becomes
+                # healthy. Keep the diagnostic, then let the /health fingerprint decide.
+                restart_proc = None
+                restart_error = _timeout_detail("systemctl restart", exc)
         except Exception as exc:  # pragma: no cover - environment dependent
             return {"ok": False, "action": "setup", "error": f"failed to start service: {exc}"}
         service_status = systemd.status()
-        if restart_proc.returncode != 0:
-            service_status["restart_error"] = (restart_proc.stderr or restart_proc.stdout or "").strip()
+        if restart_proc is not None and restart_proc.returncode != 0:
+            restart_error = _proc_failure_detail(restart_proc, f"systemctl restart exited {restart_proc.returncode}")
+        if restart_error:
+            service_status["restart_error"] = restart_error
         service_block = {
             "type": "systemd-user", "unit": str(unit_path), "name": systemd.SERVICE_NAME,
             "created_by_setup": True, "marker": manifest.marker_token(marker_id),
@@ -296,14 +314,31 @@ def _apply_setup(p: Dict[str, Any], opts: Options) -> Dict[str, Any]:
             rt["command"], p["bind"], p["port"], marker_id=marker_id, env_data_dir=p["env_data_dir"]
         )
         plist_path = launchd.write_plist(plist_text)
+        launchd_errors: List[str] = []
         try:
-            launchd.bootout()  # idempotent: clear any prior load before bootstrapping
+            # Non-zero is benign when the agent simply was not loaded yet. Bootstrap and
+            # the health probe below decide whether setup reached the desired state.
+            launchd.bootout()
+        except subprocess.TimeoutExpired as exc:
+            # The command may continue unloading asynchronously. Try bootstrap anyway, then
+            # rely on the health probe instead of leaving a written plist with no manifest.
+            launchd_errors.append(_timeout_detail("launchctl bootout", exc))
+        except Exception as exc:  # pragma: no cover - environment dependent
+            return {"ok": False, "action": "setup", "error": f"failed to unload launchd agent: {exc}"}
+        try:
             proc = launchd.bootstrap(plist_path)
             if proc.returncode != 0:
-                return {"ok": False, "action": "setup", "error": f"launchctl bootstrap failed: {proc.stderr.strip()}"}
+                launchd_errors.append(
+                    "launchctl bootstrap: "
+                    + _proc_failure_detail(proc, f"exit {proc.returncode}")
+                )
+        except subprocess.TimeoutExpired as exc:
+            launchd_errors.append(_timeout_detail("launchctl bootstrap", exc))
         except Exception as exc:  # pragma: no cover - environment dependent
             return {"ok": False, "action": "setup", "error": f"failed to start launchd agent: {exc}"}
         service_status = launchd.status()
+        if launchd_errors:
+            service_status["start_error"] = "; ".join(launchd_errors)
         service_block = {
             "type": "launchd", "unit": str(plist_path), "name": launchd.LABEL,
             "created_by_setup": True, "marker": manifest.marker_token(marker_id),

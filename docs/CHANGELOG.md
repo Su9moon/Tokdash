@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 1.0.1 - 2026-06-21
+
+### Fixed
+- `tokdash setup` no longer fails before writing the setup manifest when a slow `systemctl restart` times out client-side but the Tokdash service becomes healthy. The setup flow now records the restart diagnostic, verifies the `/health` fingerprint, and succeeds only when the configured port is actually serving Tokdash.
+- macOS launchd setup now follows the same readiness-driven behavior for slow `launchctl bootout` / `bootstrap` calls, with longer lifecycle command timeouts and regression coverage for timeout and fail-closed cases.
+
 ## 1.0.0 - 2026-06-21
 
 ### Added

@@ -15,6 +15,7 @@ from . import manifest, paths
 
 SERVICE_NAME = "tokdash"
 MARKER_COMMENT = "# Managed-by: tokdash-setup"
+LIFECYCLE_TIMEOUT = 120
 
 _NEEDS_QUOTING = set(' \t\n"\\\'')
 
@@ -108,15 +109,15 @@ def daemon_reload() -> None:
 
 
 def enable_now(name: str = SERVICE_NAME) -> subprocess.CompletedProcess:
-    return _run(["enable", "--now", name])
+    return _run(["enable", "--now", name], timeout=LIFECYCLE_TIMEOUT)
 
 
 def disable_now(name: str = SERVICE_NAME) -> subprocess.CompletedProcess:
-    return _run(["disable", "--now", name])
+    return _run(["disable", "--now", name], timeout=LIFECYCLE_TIMEOUT)
 
 
 def restart(name: str = SERVICE_NAME) -> subprocess.CompletedProcess:
-    return _run(["restart", name])
+    return _run(["restart", name], timeout=LIFECYCLE_TIMEOUT)
 
 
 def fragment_path(name: str = SERVICE_NAME) -> Optional[str]:

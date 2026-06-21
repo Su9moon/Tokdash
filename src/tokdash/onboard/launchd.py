@@ -21,6 +21,7 @@ from . import manifest, paths
 
 LABEL = "com.tokdash.tokdash"
 MARKER_COMMENT = "Managed-by: tokdash-setup"
+LIFECYCLE_TIMEOUT = 120
 
 
 def _uid() -> int:
@@ -108,16 +109,16 @@ def _run(args: List[str], timeout: int = 20) -> subprocess.CompletedProcess:
 
 
 def bootstrap(plist_path: Path) -> subprocess.CompletedProcess:
-    return _run(["bootstrap", _domain_target(), str(plist_path)])
+    return _run(["bootstrap", _domain_target(), str(plist_path)], timeout=LIFECYCLE_TIMEOUT)
 
 
 def bootout() -> subprocess.CompletedProcess:
-    return _run(["bootout", _service_target()])
+    return _run(["bootout", _service_target()], timeout=LIFECYCLE_TIMEOUT)
 
 
 def kickstart() -> subprocess.CompletedProcess:
     # `-k` kills the running instance first, so this is a true restart.
-    return _run(["kickstart", "-k", _service_target()])
+    return _run(["kickstart", "-k", _service_target()], timeout=LIFECYCLE_TIMEOUT)
 
 
 def is_loaded() -> bool:

@@ -464,6 +464,13 @@ def test_doctor_reports_no_manifest(capsys):
     assert rc == 0 and payload["ok"] is True
 
 
+def test_doctor_reports_tokdash_version(capsys):
+    from tokdash import __version__
+
+    rc, payload = run_json(["doctor", "--json"], capsys)
+    assert rc == 0 and payload["version"] == __version__
+
+
 def test_doctor_flags_manual_unit_without_manifest(fake_systemd, capsys):
     unit = paths.systemd_unit_path()
     unit.parent.mkdir(parents=True, exist_ok=True)

@@ -75,6 +75,31 @@ Decision: build a **full interactive** terminal UI (like `nvitop`/`nvtop`), as a
   - Export current view to JSON (file/stdout)
 - Non-goals (v1): charts/3D views; keep it fast and table-first
 
+## Companion status app (planned)
+Goal: at-a-glance usage/quota outside the browser tab. Phased to keep the core package at its
+current 3 runtime dependencies; note the dashboard is already an installable PWA (manifest +
+service worker), which covers the "standalone app window" want with zero code.
+
+- **Tier 1 — script templates (zero new deps, ship first):** menu-bar/tray *plugins* under
+  `docs/examples/`, same pattern as the statusline templates. Candidates: xbar/SwiftBar plugin
+  (macOS menu bar), a small PowerShell tray script (Windows — also covers WSL2 servers via
+  localhost forwarding), Waybar/i3status snippet (Linux). Each polls the local API read-only and
+  renders e.g. `12.3M ($4.56) today` plus the nearest quota reset; fails silently when Tokdash
+  isn't running.
+- **Tier 2 — `tokdash[tray]` optional extra (demand-gated):** a real cross-platform tray icon via
+  `pystray` (+`Pillow` for icon rendering) as an optional extra, mirroring the `tokdash[tui]`
+  plan. Menu: open dashboard, today's totals, quota bars, quit. Caveats to respect: needs a GUI
+  session (headless/WSL servers should use the Tier 1 Windows-side script instead), and Linux
+  tray support is fragmented (appindicator vs legacy X tray).
+- Non-goals: an Electron/Tauri desktop app (heavy, separate release train; the PWA already
+  provides an app window).
+
+## Dashboard update notice — ✅ shipped (Unreleased)
+Opt-in update badge in the dashboard header backed by the existing `§14` update-check endpoints
+(`/api/version`, `POST /api/update-check`, `POST /api/update-check/consent`). Constraints that
+must hold for any future change: no network check without consent (§14), and the web UI never
+executes the upgrade — it shows a copyable `tokdash update` command only (§15).
+
 ## Client / IDE support
 Principle: **no inference**. Only emit entries when numeric token fields exist.
 

@@ -66,6 +66,7 @@
 - **Custom date ranges**: Flatpickr date picker + quick range buttons (Today, Last 7 Days, This Month, etc.)
 - **Contribution calendar**: 2D heatmap + 3D isometric view with Tokens/Cost/Messages metrics
 - **Session explorer**: per-session drill-down for Codex, Claude Code, OpenCode, and Pi
+- **Quota tab** *[new]*: subscription window bars with reset countdowns for Codex, Claude Code, and Antigravity. Codex windows work out of the box from local logs; Codex reset credits, metered features, and all Claude/Antigravity quota need opt-in [live polling](#quota-tracking-optional)
 - **10 style themes**: Elevated, Classic, Vibrant, Midnight, Paper, Liquid, Terminal, Brutalist, Arcade, Studio
 - **Light & dark mode**: auto-detects system preference, manual toggle
 - **PWA support**: installable as a progressive web app
@@ -360,7 +361,7 @@ By default `tokdash serve` opens the dashboard in your browser once on startup. 
 
 ### Quota tracking (optional)
 
-The Quota tab shows subscription utilization windows and reset timers. Without consent, Tokdash reads only local files such as Codex session `rate_limits` and Claude's local plan/tier metadata. Live quota polling is off by default and can be enabled per provider:
+The Quota tab shows subscription utilization windows and reset timers, from two data sources. **Local logs** (no network): Codex records its own quota in session files, so the Codex 5-hour/weekly windows work out of the box — but they update only when you use Codex, and the logs never contain reset credits or metered-feature windows. **Live polling** (off by default, per-provider consent): Tokdash calls the provider's own quota endpoint with the sign-in your CLI already has — fresher, adds Codex reset credits and metered features, and is the *only* source for Claude Code and Antigravity quota:
 
 ```bash
 tokdash quota consent --codex-api on --claude-api on --antigravity-api on

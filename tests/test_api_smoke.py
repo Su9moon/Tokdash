@@ -186,6 +186,10 @@ def test_api_endpoints_and_dashboard_smoke(synthetic_api_data):
     assert "resetCredits" in html
     assert "renderQuotaBucketGroups" in html
     assert "return 'paper';" in html
+    assert "updateBadge" in html
+    assert "initUpdateNotice" in html
+    assert "tokdash update" in html
+    assert "/api/update-check" in html
     assert "__TOKDASH_BASE_PATH__" not in html
 
     icon_path = api.STATIC_DIR / "icons" / "icon-192.png"

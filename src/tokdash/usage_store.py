@@ -18,6 +18,13 @@ from .filelock import process_lock
 SCHEMA_VERSION = 5
 SIGNATURE_VERSION = 2
 
+# quota_history consumption: reset times within this many seconds are treated as the same
+# physical window, absorbing the ±1s poll-to-poll jitter (and Codex start-of-window
+# splinters) that would otherwise split one window into two epochs and double/under-count.
+# Genuinely distinct windows are far larger than this (>= ~1h in real data), so they are
+# never merged.
+RESET_JITTER_SECONDS = 5
+
 _WRITE_LOCK = threading.RLock()
 _SCHEMA_LOCK = threading.RLock()
 _SCHEMA_READY: set[str] = set()
@@ -1246,27 +1253,56 @@ class UsageEntryStore:
         # The single linear pass over sorted rows is what keeps this route fast on
         # 100k-row tables — no per-row dicts, no raw_json parsing.
         query = (
-            "SELECT provider, bucket, bucket_label, account, used_percent, captured_at"
+            "SELECT provider, bucket, bucket_label, account, used_percent, resets_at, captured_at"
             " FROM quota_snapshots WHERE " + " AND ".join(where)
             + " ORDER BY provider, bucket, captured_at ASC, id ASC"
         )
 
         series: list[dict[str, Any]] = []
 
-        def _flush(key: tuple[str, str] | None, ordered: list[tuple[int, float]], label: Any, account: Any) -> None:
+        def _flush(key: tuple[str, str] | None, ordered: list[tuple[int, float, Any]], label: Any, account: Any) -> None:
             if key is None or not ordered:
                 return
-            points = [{"captured_at": ts, "used_percent": pct} for ts, pct in ordered]
+            points = [{"captured_at": ts, "used_percent": pct} for ts, pct, _ in ordered]
+            # Consumption per period = how much the window FILLED. Track a running high per
+            # window and count only increases above that window's own high:
+            #   * two windows with different reset times that get merged into one bucket
+            #     (e.g. two Codex accounts' 7-day windows, days apart) no longer read as
+            #     reset+refill on every switch between them — each is measured against its
+            #     own high;
+            #   * a genuine window rollover is a NEW window that starts a fresh baseline, so
+            #     the drop is never counted as usage;
+            #   * transient dips (a stray low reading that immediately recovers) never inflate
+            #     the total, because a recovery to a value already seen is not a new high.
+            #
+            # A window is identified by its reset time, but resets_at jitters ±1s poll-to-poll
+            # (providers round the wall clock differently each poll — e.g. Claude reports the
+            # same 5h window as 13:39:59 then 13:40:00), and Codex adds a few start-of-window
+            # splinters. Keying on the *exact* value would split one physical window into two
+            # epochs and count the same climb in both (measured: Claude 5h/weekly inflated ~2x).
+            # So reset times within RESET_JITTER_SECONDS of each other are chained into one
+            # window identity. This never merges genuinely distinct windows: the closest ones
+            # in real data are ~1h apart, and the interleaved two-account windows are days apart.
+            resets_sorted = sorted({r for _, _, r in ordered if r is not None})
+            reset_epoch: dict[Any, Any] = {}
+            anchor: Any = None
+            for i, value in enumerate(resets_sorted):
+                if i == 0 or value - resets_sorted[i - 1] > RESET_JITTER_SECONDS:
+                    anchor = value
+                reset_epoch[value] = anchor
+
             consumption: dict[int, float] = {}
-            previous: float | None = None
-            for ts, pct in ordered:
-                if previous is None:
-                    previous = pct
+            epoch_high: dict[Any, float] = {}
+            for ts, pct, resets in ordered:
+                epoch = reset_epoch.get(resets, resets)  # None-reset rows form one epoch (None)
+                prev = epoch_high.get(epoch)
+                if prev is None:
+                    epoch_high[epoch] = pct  # first sighting of this window = baseline
                     continue
-                delta = pct if pct < previous else pct - previous
-                period_start = ts - (ts % period)
-                consumption[period_start] = round(consumption.get(period_start, 0.0) + max(0.0, delta), 4)
-                previous = pct
+                if pct > prev:
+                    period_start = ts - (ts % period)
+                    consumption[period_start] = round(consumption.get(period_start, 0.0) + (pct - prev), 4)
+                    epoch_high[epoch] = pct
             consumption_points = [
                 {"period_start": k, "consumed_percent": v} for k, v in sorted(consumption.items())
             ]
@@ -1283,7 +1319,7 @@ class UsageEntryStore:
 
         with closing(self._connect()) as conn:
             current_key: tuple[str, str] | None = None
-            ordered: list[tuple[int, float]] = []
+            ordered: list[tuple[int, float, Any]] = []
             label: Any = None
             account: Any = None
             for row in conn.execute(query, args):
@@ -1293,10 +1329,11 @@ class UsageEntryStore:
                     current_key, ordered = key, []
                 ts = int(row["captured_at"])
                 pct = float(row["used_percent"])
+                resets = row["resets_at"]
                 if ordered and ordered[-1][0] == ts:
-                    ordered[-1] = (ts, pct)
+                    ordered[-1] = (ts, pct, resets)
                 else:
-                    ordered.append((ts, pct))
+                    ordered.append((ts, pct, resets))
                 label = row["bucket_label"]
                 account = str(row["account"])
             _flush(current_key, ordered, label, account)

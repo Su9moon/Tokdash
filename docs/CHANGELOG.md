@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Added Antigravity CLI (`agy`) token-usage parsing from `~/.gemini/antigravity-cli/conversations/*.db`, including WAL-aware change detection, protobuf wire decoding without a new runtime dependency, and pricing aliases for raw Gemini 3 Antigravity model IDs.
+- Dashboard update notice: when the opt-in update check is enabled, the header shows a dismissible "Update available: vX.Y.Z" badge with a copyable `tokdash update` command; when disabled, a muted one-click "Enable update notices" link performs the consent. The web UI only reports availability; it never runs upgrades, and no network check happens without consent.
+- `tokdash doctor` now reports the Tokdash version (first line of the human output; `version` field in `--json`).
+
+### Changed
+- Reworded the quota data-source terminology everywhere it surfaces (setup wizard, Quota-tab consent cards, per-bar source chip, README): "session" vs "API" is now "local logs" vs "live polling", each stated with its consequences — local logs are Codex-only, update only when Codex runs, and never contain reset credits or metered-feature windows; live polling is fresher, adds those, and is the only quota source for Claude Code and Antigravity.
+
+### Fixed
+- Fixed Quota-tab consumption history for reset-window rollovers, transient dips, interleaved account windows, and small reset-time jitter; consumption now counts only increases above each reset window's running high.
 
 ## 1.0.7 - 2026-07-02
 

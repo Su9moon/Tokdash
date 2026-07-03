@@ -779,6 +779,48 @@
       display: none;
     }
 
+    /* Update notice (badge right of the range picker; opt-in check, terminal-only upgrade) */
+    .update-notice { position: relative; display: flex; align-items: center; }
+    .update-badge {
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      padding: 3px 10px; border-radius: 999px;
+      color: #1E40AF; background: rgba(30, 64, 175, 0.08);
+      border: 1px solid rgba(30, 64, 175, 0.35);
+    }
+    html.dark .update-badge {
+      color: #93C5FD; background: rgba(147, 197, 253, 0.10);
+      border-color: rgba(147, 197, 253, 0.35);
+    }
+    .update-enable-link {
+      font-size: 11px; cursor: pointer; background: none; border: none; padding: 0;
+      color: var(--color-label); text-decoration: underline dotted;
+    }
+    .update-popover {
+      /* Right-anchored on desktop: the pill sits deep in the control rail, so the panel
+         opens leftward toward the page center instead of clipping at the viewport edge. */
+      position: absolute; z-index: 60; top: calc(100% + 6px); right: 0;
+      min-width: 260px; max-width: min(320px, calc(100vw - 32px));
+      padding: 12px; border-radius: 12px;
+      background: var(--color-surface, #fff);
+      border: 1px solid var(--color-border, #d0d7de);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      color: var(--color-muted);
+    }
+    @media (max-width: 640px) {
+      /* Single-column layout: the pill sits near the left edge, so open rightward. */
+      .update-popover { right: auto; left: 0; }
+    }
+    .update-cmd-row { display: flex; align-items: center; gap: 8px; }
+    .update-cmd-row code {
+      flex: 1; padding: 6px 10px; border-radius: 8px; font-size: 12px;
+      background: rgba(127, 127, 127, 0.12);
+    }
+    .update-copy-btn { min-height: 28px; padding: 3px 10px; font-size: 12px; }
+    .update-skip-btn {
+      margin-top: 10px; font-size: 11px; cursor: pointer; background: none; border: none;
+      padding: 0; color: var(--color-label); text-decoration: underline dotted;
+    }
+
     /* Reduce motion */
     @media (prefers-reduced-motion: reduce) {
       * { transition: none !important; scroll-behavior: auto !important; }
@@ -809,6 +851,18 @@
           <div class="range-picker-group">
             <label for="dateRangePicker" class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="range">Range</label>
             <input type="text" id="dateRangePicker" class="ui-input" placeholder="Select date range" readonly style="min-width: 240px; cursor: pointer;" />
+            <div id="updateNotice" class="update-notice" hidden>
+              <button id="updateBadge" class="update-badge" hidden aria-haspopup="true" aria-expanded="false"></button>
+              <button id="updateEnableLink" class="update-enable-link" hidden data-i18n="updateEnable">Enable update notices</button>
+              <div id="updatePopover" class="update-popover" hidden>
+                <div id="updatePopoverText" class="text-xs mb-2"></div>
+                <div class="update-cmd-row">
+                  <code>tokdash update</code>
+                  <button id="updateCopyBtn" class="btn btn-ghost update-copy-btn" data-i18n="updateCopy">Copy</button>
+                </div>
+                <button id="updateSkipBtn" class="update-skip-btn" data-i18n="updateSkip">Skip this version</button>
+              </div>
+            </div>
           </div>
 
           <!-- Quick Range Buttons -->
@@ -1856,6 +1910,12 @@
 
     const I18N = {
       en: {
+        updateAvailable: 'Update available',
+        updateBody: 'You are on v{current}. v{latest} is available — run this in a terminal:',
+        updateCopy: 'Copy',
+        updateCopied: 'Copied!',
+        updateSkip: 'Skip this version',
+        updateEnable: 'Enable update notices',
         range: 'Range',
         today: 'Today',
         yesterday: 'Yesterday',
@@ -1909,8 +1969,9 @@
         localOnly: 'local only',
         notDetected: 'not detected',
         quotaNoData: 'No quota snapshots yet.',
-        enableQuotaApi: 'Enable API',
-        quotaConsentDesc: 'Optional live quota polling uses {endpoint} with credentials from {path}.',
+        enableQuotaApi: 'Enable live polling',
+        quotaConsentLeadCodex: 'Quota is currently read from local Codex logs: 5-hour and weekly windows only, updated only when you use Codex (so it can lag). Enable live polling for fresh data plus reset credits — it uses {endpoint} with your existing sign-in from {path}, read-only.',
+        quotaConsentLeadOther: 'No quota data without this — {provider} has no local fallback. Live polling uses {endpoint} with your existing sign-in from {path}, read-only.',
         resetCredits: 'Reset Credits',
         available: 'available',
         expires: 'expires',
@@ -1941,7 +2002,8 @@
         quotaActionSaved: 'Saved',
         quotaActionFailed: 'Failed to save',
         sourceLive: 'live',
-        sourceSession: 'session',
+        sourceSession: 'local logs',
+        sourceSessionTitle: 'Read from Codex session files — as of your last Codex activity; may lag live usage.',
         windowFiveHour: '5-hour',
         windowWeekly: 'Weekly',
         minAgo: '{n} min ago',
@@ -2077,6 +2139,12 @@
         time: 'Time',
       },
       zh: {
+        updateAvailable: '有新版本',
+        updateBody: '当前版本 v{current}，最新版本 v{latest} — 在终端运行：',
+        updateCopy: '复制',
+        updateCopied: '已复制',
+        updateSkip: '跳过此版本',
+        updateEnable: '开启更新提醒',
         range: '范围',
         today: '今天',
         yesterday: '昨天',
@@ -2130,8 +2198,9 @@
         localOnly: '仅本地',
         notDetected: '未检测到',
         quotaNoData: '暂无额度快照。',
-        enableQuotaApi: '启用 API',
-        quotaConsentDesc: '可选实时额度轮询会使用 {endpoint}，凭据来自 {path}。',
+        enableQuotaApi: '启用实时轮询',
+        quotaConsentLeadCodex: '当前额度读取自本地 Codex 日志：仅 5 小时和每周窗口，且仅在使用 Codex 时更新（可能滞后）。开启实时轮询可获得最新数据和重置点数 — 使用 {endpoint}，凭据来自本地已有登录 {path}，只读。',
+        quotaConsentLeadOther: '不开启则没有任何额度数据 — {provider} 没有本地数据来源。实时轮询使用 {endpoint}，凭据来自本地已有登录 {path}，只读。',
         resetCredits: '重置额度',
         available: '可用',
         expires: '到期',
@@ -2162,7 +2231,8 @@
         quotaActionSaved: '已保存',
         quotaActionFailed: '保存失败',
         sourceLive: '实时',
-        sourceSession: '会话',
+        sourceSession: '本地日志',
+        sourceSessionTitle: '读取自 Codex 本地会话文件 — 截至上次使用 Codex，可能滞后于实时用量。',
         windowFiveHour: '5 小时',
         windowWeekly: '每周',
         minAgo: '{n} 分钟前',
@@ -4531,6 +4601,35 @@
       return bucket.bucket_label || key || '—';
     }
 
+    // Chart legend label for a history series — unified with the card labels: "Codex 5-hour",
+    // "Codex Weekly", "Codex-Spark 5-hour", "Claude 5-hour", "Claude Weekly", "Claude Fable",
+    // and the Antigravity pool names. Keeps the chart legend readable instead of echoing raw
+    // bucket labels like "7-day window" / "Session".
+    function quotaSeriesLabel(item) {
+      const provider = item.provider;
+      const key = String(item.bucket || '');
+      const isFive = key === '5h' || key.endsWith('_5h');
+      const isWeek = key === '7d' || key.endsWith('_7d');
+      const win = isFive ? t('windowFiveHour') : isWeek ? t('windowWeekly') : (item.bucket_label || key);
+      if (provider === 'codex') {
+        if (key === '5h' || key === '7d') return `Codex ${win}`;
+        // Metered feature (Spark, future ones): "GPT-5.3-Codex-Spark · 5-hour" → "Codex-Spark 5-hour".
+        const feature = (String(item.bucket_label || '').split('·')[0] || '').trim();
+        const short = feature.split(/[-\s]+/).filter(Boolean).pop() || 'Feature';
+        return `Codex-${short} ${win}`;
+      }
+      if (provider === 'claude') {
+        if (key === 'session') return `Claude ${t('windowFiveHour')}`;
+        if (key === 'weekly_all') return `Claude ${t('windowWeekly')}`;
+        return `Claude ${item.bucket_label || key}`; // Fable etc.
+      }
+      if (provider === 'antigravity') {
+        // Pooled series already carry the group name ("Gemini Models" / "Claude and GPT Models").
+        return item.bucket_label || 'Antigravity';
+      }
+      return `${quotaProviderLabel(provider)} ${item.bucket_label || key}`;
+    }
+
     // A muted uppercase sub-heading grouping a set of bars (codex Spark, antigravity pools).
     function quotaSubtitleEl(text, tight) {
       const el = document.createElement('div');
@@ -4548,7 +4647,7 @@
       const label = document.createElement('span');
       label.className = 'font-semibold';
       label.textContent = labelOverride || quotaWindowLabel(provider, bucket);
-      // "live" tags were removed as noise; keep a "session" tag only when the row comes
+      // "live" tags were removed as noise; keep a "local logs" tag only when the row comes
       // from session-file scanning (not the live API), since that data can lag.
       const isLive = String(bucket.source || '').endsWith('_api');
       if (!isLive) {
@@ -4557,6 +4656,7 @@
         sourceTag.style.background = 'color-mix(in srgb, var(--color-text) 8%, transparent)';
         sourceTag.style.color = 'var(--color-muted)';
         sourceTag.textContent = t('sourceSession');
+        sourceTag.title = t('sourceSessionTitle');
         label.appendChild(sourceTag);
       }
       const remaining = quotaRemainingPercent(bucket);
@@ -4832,7 +4932,11 @@
           const desc = document.createElement('div');
           desc.className = 'text-xs mb-3';
           desc.style.color = 'var(--color-muted)';
-          desc.textContent = t('quotaConsentDesc').replace('{endpoint}', consentMeta.endpoint).replace('{path}', consentMeta.path);
+          const leadKey = providerKey === 'codex' ? 'quotaConsentLeadCodex' : 'quotaConsentLeadOther';
+          desc.textContent = t(leadKey)
+            .replace('{provider}', quotaProviderLabel(providerKey))
+            .replace('{endpoint}', consentMeta.endpoint)
+            .replace('{path}', consentMeta.path);
           const button = document.createElement('button');
           button.className = 'btn btn-ghost';
           button.type = 'button';
@@ -4984,7 +5088,7 @@
       // TASK 1: this chart plots REMAINING quota (100 - used_percent), matching the
       // bucket rows above.
       const utilizationDatasets = series.map((item, index) => ({
-        label: `${quotaProviderLabel(item.provider)} ${item.bucket_label || item.bucket}`,
+        label: quotaSeriesLabel(item),
         data: (item.points || []).map((p) => ({ x: p.captured_at * 1000, y: p.used_percent === null || p.used_percent === undefined ? null : 100 - p.used_percent })),
         borderColor: palette[index % palette.length],
         backgroundColor: palette[index % palette.length] + '33',
@@ -5015,7 +5119,7 @@
           if (i !== undefined) data[i] = p.consumed_percent;
         });
         return {
-          label: `${quotaProviderLabel(item.provider)} ${item.bucket_label || item.bucket}`,
+          label: quotaSeriesLabel(item),
           data,
           backgroundColor: palette[index % palette.length] + 'BF',
           borderColor: palette[index % palette.length],
@@ -6771,11 +6875,88 @@
       });
     })();
 
+    // --- Update notice ------------------------------------------------------
+    // Opt-in by design (§14): the PyPI check runs only after explicit consent
+    // (dashboard link, wizard, or TOKDASH_UPDATE_CHECK=1). The badge only
+    // *reports* availability — upgrading stays a terminal action
+    // (`tokdash update`, which detects pip/pipx); the web UI never runs it (§15).
+    const UPDATE_SKIP_KEY = 'tokdash-update-skipped';
+
+    async function postUpdateEndpoint(path) {
+      // Same-origin write: fetch the per-session token and echo it back
+      // (same pattern as the pricing-db editor; token rotates per server start).
+      let csrfToken = '';
+      try {
+        const tokenResp = await fetch(appPath('/api/csrf-token'));
+        if (tokenResp.ok) csrfToken = (await tokenResp.json()).token || '';
+      } catch (_) { /* fall through; the POST will 403 */ }
+      const resp = await fetch(appPath(path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Tokdash-Token': csrfToken },
+      });
+      if (!resp.ok) throw new Error(String(resp.status));
+      return resp.json();
+    }
+
+    function renderUpdateBadge(info) {
+      if (!info || !info.update_available || !info.latest) return;
+      if (localStorage.getItem(UPDATE_SKIP_KEY) === String(info.latest)) return;
+      const notice = document.getElementById('updateNotice');
+      const badge = document.getElementById('updateBadge');
+      const popover = document.getElementById('updatePopover');
+      badge.textContent = `${t('updateAvailable')}: v${info.latest}`;
+      document.getElementById('updatePopoverText').textContent = t('updateBody')
+        .replace('{current}', info.current || '?')
+        .replace('{latest}', info.latest);
+      notice.hidden = false;
+      badge.hidden = false;
+      badge.addEventListener('click', () => {
+        popover.hidden = !popover.hidden;
+        badge.setAttribute('aria-expanded', String(!popover.hidden));
+      });
+      document.getElementById('updateCopyBtn').addEventListener('click', async (ev) => {
+        try {
+          await navigator.clipboard.writeText('tokdash update');
+          ev.target.textContent = t('updateCopied');
+          setTimeout(() => { ev.target.textContent = t('updateCopy'); }, 1500);
+        } catch (_) { /* clipboard unavailable (http remote); command stays visible to select */ }
+      });
+      document.getElementById('updateSkipBtn').addEventListener('click', () => {
+        localStorage.setItem(UPDATE_SKIP_KEY, String(info.latest));
+        notice.hidden = true;
+      });
+    }
+
+    async function initUpdateNotice() {
+      try {
+        const resp = await fetch(appPath('/api/version'));
+        if (!resp.ok) return;
+        const version = await resp.json();
+        const notice = document.getElementById('updateNotice');
+        const enableLink = document.getElementById('updateEnableLink');
+        if (!version.update_check_enabled) {
+          // Not consented: no network check, no badge — just a muted one-click opt-in.
+          notice.hidden = false;
+          enableLink.hidden = false;
+          enableLink.addEventListener('click', async () => {
+            try {
+              await postUpdateEndpoint('/api/update-check/consent');
+              enableLink.hidden = true;
+              renderUpdateBadge(await postUpdateEndpoint('/api/update-check'));
+            } catch (_) { /* leave the link so the user can retry */ }
+          });
+          return;
+        }
+        renderUpdateBadge(await postUpdateEndpoint('/api/update-check'));
+      } catch (_) { /* fail-soft: the dashboard must never depend on this */ }
+    }
+
     applyStyleTheme(getDefaultStyleTheme());
     applyTheme(getDefaultTheme());
     applyI18n();
     initQuotaRangeSelect();
     initQuotaVisibilityControls();
+    initUpdateNotice();
 
     document.getElementById('styleThemeSelect').addEventListener('change', (event) => {
       const next = event.target.value || 'paper';

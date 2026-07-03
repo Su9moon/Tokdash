@@ -535,9 +535,12 @@ def cmd_doctor(opts: Options) -> int:
     service_info = _doctor_service(man, detection)
     _append_service_issues(issues, man, service_info, detection)
 
+    from .. import __version__
+
     report = {
         "ok": not issues,
         "action": "doctor",
+        "version": __version__,
         "os": detection["os"],
         "python": {"version": fit.get("version"), "fit": fit.get("fit"), "reason": fit.get("reason")},
         "systemd_user": detection["systemd_user"],
@@ -1330,6 +1333,7 @@ def _print_doctor_human(r: Dict[str, Any]) -> None:
     mark = _ok("✓") if r["ok"] else _bad("✗")
     title = _ok(_bold("Tokdash doctor")) if r["ok"] else _bad(_bold("Tokdash doctor"))
     print(f"{mark} {title}\n")
+    print(f"  Version:      {r.get('version') or 'unknown'}")
     print(f"  OS:           {r['os']}")
     py = r["python"]
     print(f"  Python:       {py['version']} ({'fit' if py['fit'] else 'UNFIT: ' + str(py['reason'])})")
@@ -1407,8 +1411,14 @@ def _quota_setup_wizard() -> None:
         return
 
     print("\n" + _bold("Quota tracking (optional)"))
-    print("  Tokdash can track your subscription quota: local Codex session windows, plus")
-    print("  each provider's own quota API polled with your local CLI credentials (default: no).")
+    print("  The Quota tab shows how much of each subscription window (5-hour / weekly) is")
+    print("  used and when it resets. Two data sources:")
+    print("    - Local logs (no network): Codex records its own quota in session files;")
+    print("      works out of the box, Codex only, updates only when you use Codex.")
+    print("    - Live polling (off by default): asks each provider's quota endpoint using")
+    print("      the sign-in your CLI already has. Fresher, adds Codex reset credits, and")
+    print("      is the ONLY source for Claude Code and Antigravity. Read-only; Tokdash")
+    print("      never refreshes or writes credentials.")
 
     # Master switch — identical to the Quota tab's "Quota tracking" toggle (config
     # quota.enabled). Off disables ALL quota work (including local session scanning); on
@@ -1431,12 +1441,12 @@ def _quota_setup_wizard() -> None:
     # stop asking" — the wizard never blocks or crashes an otherwise-successful setup.
     try:
         consent_updates: Dict[str, Any] = {}
-        for key, label in (
-            ("codex_api", "Codex"),
-            ("claude_api", "Claude Code"),
-            ("antigravity_api", "Antigravity"),
+        for key, label, hint in (
+            ("codex_api", "Codex", "fresher than local logs; adds reset credits"),
+            ("claude_api", "Claude Code", "required for any Claude quota data"),
+            ("antigravity_api", "Antigravity", "required for any Antigravity quota data"),
         ):
-            consent_updates[key] = _confirm(f"  Enable {label} quota API polling?", default=False)
+            consent_updates[key] = _confirm(f"  Enable live quota polling for {label} ({hint})?", default=False)
         try:
             quota_config.set_quota_consent(consent_updates)
         except Exception:

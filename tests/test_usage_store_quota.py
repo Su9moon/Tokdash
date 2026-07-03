@@ -41,27 +41,85 @@ def test_quota_snapshots_are_idempotent_and_reported_in_status(tmp_path):
     assert store.status()["quota_snapshots"] == 2
 
 
+def _snap_reset(bucket: str, used: float, captured_at: int, resets_at: int) -> QuotaSnapshot:
+    # Like _snapshot but with an explicit resets_at, so a window's identity (its reset time)
+    # is independent of when it was sampled — which is what consumption keys on.
+    return QuotaSnapshot(
+        "codex", "acct", bucket, bucket, used, resets_at, "pro", captured_at, "codex_session", "ok", {"used": used}
+    )
+
+
 def test_quota_history_derives_consumption_and_reset_deltas(tmp_path):
     store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    r1, r2 = BASE_TS + 18_000, BASE_TS + 36_000  # two window epochs (distinct reset times)
     store.insert_quota_snapshots(
         [
-            _snapshot("5h", 10.0, BASE_TS),
-            _snapshot("5h", 22.5, BASE_TS + 3600),
-            _snapshot("5h", 5.0, BASE_TS + 7200),
+            _snap_reset("5h", 10.0, BASE_TS, r1),            # epoch A baseline
+            _snap_reset("5h", 22.5, BASE_TS + 3600, r1),     # +12.5
+            _snap_reset("5h", 20.0, BASE_TS + 5400, r1),     # dip within epoch A -> ignored
+            _snap_reset("5h", 5.0, BASE_TS + 7200, r2),      # reset: epoch B baseline (drop not counted)
+            _snap_reset("5h", 18.0, BASE_TS + 10800, r2),    # +13.0 post-reset
         ]
     )
 
     history = store.quota_history(granularity="hour")
 
     assert history["granularity"] == "hour"
-    assert history["series"][0]["points"] == [
-        {"captured_at": BASE_TS, "used_percent": 10.0},
-        {"captured_at": BASE_TS + 3600, "used_percent": 22.5},
-        {"captured_at": BASE_TS + 7200, "used_percent": 5.0},
-    ]
+    # Points keep every raw reading (line chart), including the dip.
+    assert [p["used_percent"] for p in history["series"][0]["points"]] == [10.0, 22.5, 20.0, 5.0, 18.0]
+    # Consumption counts only increases above each epoch's running high: the dip and the
+    # reset drop contribute nothing; the post-reset climb counts fresh.
     assert history["series"][0]["consumption"] == [
         {"period_start": BASE_TS + 3600, "consumed_percent": 12.5},
-        {"period_start": BASE_TS + 7200, "consumed_percent": 5.0},
+        {"period_start": BASE_TS + 10800, "consumed_percent": 13.0},
+    ]
+
+
+def test_quota_history_interleaved_windows_do_not_inflate_consumption(tmp_path):
+    # Regression: two distinct windows (different reset times) merged into one bucket — e.g.
+    # two Codex accounts' 7-day windows — must NOT read as reset+refill on every switch. The
+    # old delta model turned this into ~92%; keyed on resets_at it is the real 10%.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    rx, ry = BASE_TS + 600_000, BASE_TS + 800_000
+    store.insert_quota_snapshots(
+        [
+            _snap_reset("7d", 40.0, BASE_TS + 0, rx),
+            _snap_reset("7d", 6.0, BASE_TS + 600, ry),
+            _snap_reset("7d", 44.0, BASE_TS + 1200, rx),
+            _snap_reset("7d", 8.0, BASE_TS + 1800, ry),
+            _snap_reset("7d", 48.0, BASE_TS + 2400, rx),
+        ]
+    )
+
+    history = store.quota_history(granularity="hour")
+
+    # window X climbs 40->48 (+8), window Y 6->8 (+2); total 10, all within the first hour.
+    assert history["series"][0]["consumption"] == [
+        {"period_start": BASE_TS, "consumed_percent": 10.0},
+    ]
+
+
+def test_quota_history_absorbs_reset_time_jitter(tmp_path):
+    # Regression: providers report the SAME physical window's reset time with ±1s jitter
+    # poll-to-poll (e.g. Claude alternates 13:39:59 / 13:40:00). Keyed on the exact reset
+    # time that splits one window into two epochs and counts the climb in both (~2x). Reset
+    # times within RESET_JITTER_SECONDS must chain into one window: the climb counts once.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    r, rj = BASE_TS + 18_000, BASE_TS + 18_001  # same window, 1s jitter
+    store.insert_quota_snapshots(
+        [
+            _snap_reset("session", 10.0, BASE_TS + 0, r),
+            _snap_reset("session", 20.0, BASE_TS + 600, rj),
+            _snap_reset("session", 30.0, BASE_TS + 1200, r),
+            _snap_reset("session", 40.0, BASE_TS + 1800, rj),
+        ]
+    )
+
+    history = store.quota_history(granularity="hour")
+
+    # One window climbing 10->40 = 30 consumed (NOT 40, which exact-reset keying would give).
+    assert history["series"][0]["consumption"] == [
+        {"period_start": BASE_TS, "consumed_percent": 30.0},
     ]
 
 

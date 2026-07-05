@@ -49,6 +49,22 @@ def _snap_reset(bucket: str, used: float, captured_at: int, resets_at: int) -> Q
     )
 
 
+def _provider_snap_reset(provider: str, bucket: str, used: float, captured_at: int, resets_at: int | None) -> QuotaSnapshot:
+    return QuotaSnapshot(
+        provider,
+        "acct",
+        bucket,
+        bucket,
+        used,
+        resets_at,
+        "pro",
+        captured_at,
+        f"{provider}_api",
+        "ok",
+        {"used": used},
+    )
+
+
 def test_quota_history_derives_consumption_and_reset_deltas(tmp_path):
     store = UsageEntryStore(tmp_path / "usage.sqlite3")
     r1, r2 = BASE_TS + 18_000, BASE_TS + 36_000  # two window epochs (distinct reset times)
@@ -72,6 +88,82 @@ def test_quota_history_derives_consumption_and_reset_deltas(tmp_path):
     assert history["series"][0]["consumption"] == [
         {"period_start": BASE_TS + 3600, "consumed_percent": 12.5},
         {"period_start": BASE_TS + 10800, "consumed_percent": 13.0},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "bucket"),
+    [
+        ("codex", "5h"),
+        ("codex", "7d"),
+        ("codex", "codex_bengalfox_5h"),
+        ("codex", "codex_bengalfox_7d"),
+        ("claude", "session"),
+        ("claude", "weekly_all"),
+        ("claude", "weekly_scoped_fable"),
+        ("antigravity", "gemini-3-flash"),
+        ("antigravity", "claude-sonnet-4-6"),
+    ],
+)
+def test_quota_history_counts_usage_across_reset_timestamp_change_for_subscription_buckets(
+    tmp_path, provider, bucket
+):
+    # UI remaining 40->10, reset 10->100, then 100->90 maps to stored used_percent
+    # 60->90, reset 90->0, then 0->10. Total daily consumption is 30+10 = 40.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    r1, r2 = BASE_TS + 18_000, BASE_TS + 36_000
+    store.insert_quota_snapshots(
+        [
+            _provider_snap_reset(provider, bucket, 60.0, BASE_TS, r1),
+            _provider_snap_reset(provider, bucket, 90.0, BASE_TS + 1800, r1),
+            _provider_snap_reset(provider, bucket, 0.0, BASE_TS + 3600, r2),
+            _provider_snap_reset(provider, bucket, 10.0, BASE_TS + 5400, r2),
+        ]
+    )
+
+    history = store.quota_history(granularity="day")
+
+    assert history["series"][0]["consumption"] == [
+        {"period_start": BASE_TS - (BASE_TS % 86400), "consumed_percent": 40.0},
+    ]
+
+
+def test_quota_history_treats_same_reset_drop_as_transient_for_claude_weekly(tmp_path):
+    # Claude weekly rows are treated as fixed-window limits: with a stable reset timestamp,
+    # a dip below the prior high is noise/aging inside the same epoch, not a reset signal.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    resets_at = BASE_TS + 7 * 86400
+    store.insert_quota_snapshots(
+        [
+            _provider_snap_reset("claude", "weekly_all", 80.0, BASE_TS, resets_at),
+            _provider_snap_reset("claude", "weekly_all", 70.0, BASE_TS + 1800, resets_at),
+            _provider_snap_reset("claude", "weekly_all", 75.0, BASE_TS + 3600, resets_at),
+        ]
+    )
+
+    history = store.quota_history(granularity="day")
+
+    assert history["series"][0]["consumption"] == []
+
+
+def test_quota_history_counts_post_reset_usage_when_reset_time_is_missing(tmp_path):
+    # Some live subscription rows, especially a few Antigravity pools and older Claude
+    # session rows, have no reset timestamp. A clear drop to zero still represents a reset,
+    # and the post-reset climb should count as new usage.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    store.insert_quota_snapshots(
+        [
+            _provider_snap_reset("antigravity", "chat_20706", 60.0, BASE_TS, None),
+            _provider_snap_reset("antigravity", "chat_20706", 90.0, BASE_TS + 1800, None),
+            _provider_snap_reset("antigravity", "chat_20706", 0.0, BASE_TS + 3600, None),
+            _provider_snap_reset("antigravity", "chat_20706", 10.0, BASE_TS + 5400, None),
+        ]
+    )
+
+    history = store.quota_history(granularity="day")
+
+    assert history["series"][0]["consumption"] == [
+        {"period_start": BASE_TS - (BASE_TS % 86400), "consumed_percent": 40.0},
     ]
 
 
@@ -121,6 +213,47 @@ def test_quota_history_absorbs_reset_time_jitter(tmp_path):
     assert history["series"][0]["consumption"] == [
         {"period_start": BASE_TS, "consumed_percent": 30.0},
     ]
+
+
+def test_quota_history_codex_weekly_counts_climbs_after_rolling_drop(tmp_path):
+    # Codex's 7-day window is rolling: older usage can age out before the reset timestamp
+    # changes. A later climb below the earlier high is still new consumption and must show
+    # up in the daily chart.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    resets_at = BASE_TS + 7 * 86400
+    day_2 = BASE_TS + 86400
+    store.insert_quota_snapshots(
+        [
+            _snap_reset("7d", 80.0, BASE_TS, resets_at),
+            _snap_reset("7d", 70.0, day_2, resets_at),
+            _snap_reset("7d", 75.0, day_2 + 3600, resets_at),
+        ]
+    )
+
+    history = store.quota_history(granularity="day")
+
+    assert history["series"][0]["consumption"] == [
+        {"period_start": day_2 - (day_2 % 86400), "consumed_percent": 5.0},
+    ]
+
+
+def test_quota_history_codex_weekly_ignores_recovery_to_prior_high_after_transient_drop(tmp_path):
+    # Adjacent-delta windows must not turn a transient low reading followed by recovery
+    # to the previous high into fake consumption.
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    resets_at = BASE_TS + 7 * 86400
+    day_2 = BASE_TS + 86400
+    store.insert_quota_snapshots(
+        [
+            _snap_reset("7d", 80.0, BASE_TS, resets_at),
+            _snap_reset("7d", 70.0, day_2, resets_at),
+            _snap_reset("7d", 80.0, day_2 + 3600, resets_at),
+        ]
+    )
+
+    history = store.quota_history(granularity="day")
+
+    assert history["series"][0]["consumption"] == []
 
 
 def test_quota_history_skips_status_and_reset_credit_rows(tmp_path):

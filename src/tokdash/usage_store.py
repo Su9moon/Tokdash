@@ -24,10 +24,47 @@ SIGNATURE_VERSION = 2
 # Genuinely distinct windows are far larger than this (>= ~1h in real data), so they are
 # never merged.
 RESET_JITTER_SECONDS = 5
+QUOTA_RECOVERY_EPSILON_PERCENT = 0.5
 
 _WRITE_LOCK = threading.RLock()
 _SCHEMA_LOCK = threading.RLock()
 _SCHEMA_READY: set[str] = set()
+
+
+def _quota_history_uses_adjacent_deltas(provider: str, bucket: str, resets_at: Any) -> bool:
+    """Whether quota consumption should count adjacent positive deltas.
+
+    Fixed-window limits are better handled by the running-high path below: a reset advances
+    ``resets_at`` and starts a new baseline, while transient dips inside one reset epoch do
+    not inflate usage. Codex's primary and suffixed feature weekly buckets are rolling
+    7-day windows, so usage can age out while ``resets_at`` stays stable. Rows without a
+    reset timestamp have the same ambiguity: a reset is visible only as a drop.
+
+    Legacy Codex metered-feature buckets without a ``_7d`` suffix are not distinguishable
+    here without parsing raw JSON for every history row; those keep fixed-window semantics
+    unless ``resets_at`` is missing.
+    """
+    if resets_at is None:
+        return True
+    if provider == "codex" and (bucket == "7d" or bucket.endswith("_7d")):
+        return True
+    return False
+
+
+def _quota_adjacent_consumed_delta(prev: float, pct: float, prior_high: float | None) -> float:
+    """Positive adjacent delta, with transient recovery to a prior high suppressed.
+
+    Rolling/unknown-reset windows need adjacent deltas so real usage after an age-out/drop
+    still counts. The hard ambiguous case is a low outlier that simply recovers to the
+    previous high. Treat recovery to within a small band around that prior high as noise;
+    if it rises clearly above the old high, count only the excess above the old high.
+    """
+    if pct <= prev:
+        return 0.0
+    delta = pct - prev
+    if prior_high is not None and prev < prior_high and pct >= prior_high - QUOTA_RECOVERY_EPSILON_PERCENT:
+        delta = max(0.0, pct - prior_high)
+    return 0.0 if delta <= QUOTA_RECOVERY_EPSILON_PERCENT else delta
 
 
 def persistent_usage_db_enabled() -> bool:
@@ -1264,8 +1301,8 @@ class UsageEntryStore:
             if key is None or not ordered:
                 return
             points = [{"captured_at": ts, "used_percent": pct} for ts, pct, _ in ordered]
-            # Consumption per period = how much the window FILLED. Track a running high per
-            # window and count only increases above that window's own high:
+            # Consumption per period = how much the window FILLED. Fixed reset windows use a
+            # running high per window and count only increases above that window's own high:
             #   * two windows with different reset times that get merged into one bucket
             #     (e.g. two Codex accounts' 7-day windows, days apart) no longer read as
             #     reset+refill on every switch between them — each is measured against its
@@ -1283,6 +1320,9 @@ class UsageEntryStore:
             # So reset times within RESET_JITTER_SECONDS of each other are chained into one
             # window identity. This never merges genuinely distinct windows: the closest ones
             # in real data are ~1h apart, and the interleaved two-account windows are days apart.
+            #
+            # Some buckets need adjacent-delta semantics instead; see
+            # `_quota_history_uses_adjacent_deltas` for the exact invariant and known limits.
             resets_sorted = sorted({r for _, _, r in ordered if r is not None})
             reset_epoch: dict[Any, Any] = {}
             anchor: Any = None
@@ -1293,8 +1333,21 @@ class UsageEntryStore:
 
             consumption: dict[int, float] = {}
             epoch_high: dict[Any, float] = {}
+            epoch_prev: dict[Any, float] = {}
             for ts, pct, resets in ordered:
                 epoch = reset_epoch.get(resets, resets)  # None-reset rows form one epoch (None)
+                if _quota_history_uses_adjacent_deltas(key[0], key[1], resets):
+                    prev = epoch_prev.get(epoch)
+                    high = epoch_high.get(epoch)
+                    epoch_prev[epoch] = pct
+                    epoch_high[epoch] = pct if high is None else max(high, pct)
+                    if prev is None:
+                        continue
+                    delta = _quota_adjacent_consumed_delta(prev, pct, high)
+                    if delta:
+                        period_start = ts - (ts % period)
+                        consumption[period_start] = round(consumption.get(period_start, 0.0) + delta, 4)
+                    continue
                 prev = epoch_high.get(epoch)
                 if prev is None:
                     epoch_high[epoch] = pct  # first sighting of this window = baseline

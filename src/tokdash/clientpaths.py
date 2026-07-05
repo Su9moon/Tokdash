@@ -37,6 +37,13 @@ def opencode_db_path() -> Path:
     return Path.home() / ".local/share/opencode/opencode.db"
 
 
+# --- Mimo / Mimocode -----------------------------------------------------------
+
+
+def mimocode_db_path() -> Path:
+    return Path.home() / ".local/share/mimocode/mimocode.db"
+
+
 # --- Codex --------------------------------------------------------------------
 
 

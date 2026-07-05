@@ -15,12 +15,13 @@ from .pricing import PricingDatabase
 from .usage_store import UsageEntryStore, parser_code_signature, persistent_usage_db_enabled
 
 
-SESSION_TOOLS = ("codex", "claude", "opencode", "pi_agent")
+SESSION_TOOLS = ("codex", "claude", "opencode", "pi_agent", "mimo")
 TOOL_LABELS = {
     "codex": "Codex",
     "claude": "Claude Code",
     "opencode": "OpenCode",
     "pi_agent": "Pi",
+    "mimo": "Mimo",
 }
 
 _PRICING_DB = PricingDatabase()
@@ -54,6 +55,7 @@ def reload_pricing_db() -> None:
     _load_opencode_sessions.cache_clear()
     _parse_pi_session_file.cache_clear()
     _load_pi_sessions.cache_clear()
+    _load_mimo_sessions.cache_clear()
 
 
 def _truthy_env(name: str) -> bool:
@@ -1134,6 +1136,112 @@ def _pi_sessions() -> Dict[str, Dict[str, Any]]:
     return _load_pi_sessions(_pi_session_signatures(), _pricing_signature())
 
 
+@lru_cache(maxsize=4)
+def _load_mimo_sessions(signature: tuple, _pricing_sig: tuple = ()) -> Dict[str, Dict[str, Any]]:
+    if not signature:
+        return {}
+    db_path = Path(signature[0][0])
+    if not db_path.exists():
+        return {}
+
+    sessions: Dict[str, Dict[str, Any]] = {}
+    turn_index_by_session: Dict[str, int] = {}
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT m.session_id, m.data, m.time_created,
+                   s.title, s.directory
+            FROM message m
+            LEFT JOIN session s ON s.id = m.session_id
+            ORDER BY m.session_id, m.time_created
+            """
+        )
+        rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        return {}
+
+    for session_id, data_json, ts_ms, title, directory in rows:
+        try:
+            data = json.loads(data_json)
+            if data.get("role") != "assistant":
+                continue
+            tokens = data.get("tokens")
+            if not isinstance(tokens, dict):
+                continue
+
+            cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+            input_t = int(tokens.get("input") or 0)
+            output_t = int(tokens.get("output") or 0)
+            cache_r = int(cache.get("read") or 0)
+            cache_w = int(cache.get("write") or 0)
+            reasoning = int(tokens.get("reasoning") or 0)
+            total_tokens = input_t + output_t + cache_r + cache_w + reasoning
+            if total_tokens == 0:
+                continue
+
+            model = str(data.get("modelID") or "unknown")
+            provider = str(data.get("providerID") or "")
+            full_model = f"{provider}/{model}" if provider else model
+
+            data_cost = float(data.get("cost") or 0.0)
+            cost = data_cost if data_cost > 0 else _PRICING_DB.get_cost(full_model, input_t, output_t, cache_r, cache_w)
+
+            sid = str(session_id)
+            project = _project_from_repo_or_path(None, directory or None)
+            display_name = _clean_display_name(title) or _fallback_display_name(sid, project)
+
+            raw = sessions.setdefault(
+                sid,
+                {
+                    "tool": "mimo",
+                    "session_id": sid,
+                    "display_name": display_name,
+                    "project": project,
+                    "turns": [],
+                },
+            )
+            if not raw.get("display_name"):
+                raw["display_name"] = display_name
+
+            turn_index = turn_index_by_session.get(sid, 0) + 1
+            turn_index_by_session[sid] = turn_index
+            raw["turns"].append(
+                _build_turn(
+                    turn_index=turn_index,
+                    timestamp_ms=int(ts_ms or 0),
+                    model=model,
+                    tokens_in=input_t + cache_w,
+                    tokens_cache=cache_r,
+                    tokens_out=output_t,
+                    tokens_reasoning=reasoning,
+                    cost=cost,
+                )
+            )
+        except Exception:
+            continue
+
+    return sessions
+
+
+def _mimo_session_signatures() -> tuple:
+    db_path = clientpaths.mimocode_db_path()
+    if not db_path.exists():
+        return ()
+    try:
+        s = db_path.stat()
+        return ((str(db_path), s.st_mtime_ns, s.st_size),)
+    except (FileNotFoundError, OSError):
+        return ()
+
+
+def _mimo_sessions() -> Dict[str, Dict[str, Any]]:
+    return _load_mimo_sessions(_mimo_session_signatures(), _pricing_signature())
+
+
 def _raw_sessions_for_tool(
     tool: str,
     since_ms: Optional[int] = None,
@@ -1153,6 +1261,8 @@ def _raw_sessions_for_tool(
         return _opencode_sessions(since_ms=since_ms, until_ms=until_ms)
     if key == "pi_agent":
         return _pi_sessions()
+    if key == "mimo":
+        return _mimo_sessions()
     raise ValueError(f"Unsupported session tool: {tool}")
 
 

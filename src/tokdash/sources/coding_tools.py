@@ -89,6 +89,37 @@ def _glob_sigs(pattern: str) -> tuple:
     return tuple(sorted(items))
 
 
+def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        return cur.fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def _mimo_imported_message_ids(conn: sqlite3.Connection) -> set[str]:
+    imported: set[str] = set()
+    for table in ("external_import", "claude_import"):
+        if not _sqlite_table_exists(conn, table):
+            continue
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT message_ids FROM {table} WHERE message_ids IS NOT NULL")
+            rows = cur.fetchall()
+        except sqlite3.Error:
+            continue
+        for (message_ids_json,) in rows:
+            try:
+                message_ids = json.loads(message_ids_json)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(message_ids, list):
+                continue
+            imported.update(str(message_id) for message_id in message_ids if message_id is not None)
+    return imported
+
+
 def _pb_read_varint(buf: bytes, pos: int) -> tuple[int, int]:
     value = 0
     shift = 0
@@ -1920,6 +1951,173 @@ class HermesParser(BaseParser):
         return out
 
 
+class MimoParser(BaseParser):
+    """
+    Parser for Mimocode / Mimo token usage.
+
+    =======================================================================
+    MIMO SQLite DATABASE SCHEMA
+    =======================================================================
+    Location: ~/.local/share/mimocode/mimocode.db
+
+    Table: message
+      - id TEXT
+      - session_id TEXT
+      - time_created INTEGER  (epoch ms)
+      - time_updated INTEGER  (epoch ms)
+      - data TEXT             (JSON blob)
+
+    The data JSON for assistant messages contains:
+      - role: "assistant"
+      - cost: float (direct cost when available)
+      - tokens:
+          - input: int
+          - output: int
+          - reasoning: int
+          - cache:
+              - read: int
+              - write: int
+      - modelID: str
+      - providerID: str
+      - time.created: int (epoch ms)
+      - time.completed: int (epoch ms)
+
+    Field mapping to normalized entry:
+      source    <- "mimo"
+      model     <- data.modelID
+      provider  <- data.providerID
+      input     <- data.tokens.input
+      output    <- data.tokens.output
+      cacheRead <- data.tokens.cache.read
+      cacheWrite<- data.tokens.cache.write
+      reasoning <- data.tokens.reasoning
+      cost      <- data.cost when > 0, else pricing DB lookup
+      timestamp <- time_created (column, epoch ms)
+
+    Dedup: message.id (text primary key).
+    =======================================================================
+    """
+
+    source_name = "mimo"
+    sync_capability = SourceSyncCapability(
+        mode="source_native_db",
+        session_store=False,
+        reason="Mimo is an OpenCode-shaped SQLite DB and supports SQL date windows.",
+    )
+
+    _query_cache: ClassVar[Dict[tuple, List[Dict[str, Any]]]] = {}
+    _query_cache_sig: ClassVar[tuple] = ()
+
+    def __init__(self, pricing_db: PricingDatabase):
+        super().__init__(pricing_db)
+        self.db_path = clientpaths.mimocode_db_path()
+
+    def _build_entry(self, data: Dict[str, Any], ts_ms: int) -> Dict[str, Any]:
+        tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+        cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+        input_t = self._i(tokens.get("input"))
+        output_t = self._i(tokens.get("output"))
+        cache_r = self._i(cache.get("read"))
+        cache_w = self._i(cache.get("write"))
+        reasoning = self._i(tokens.get("reasoning"))
+        model = str(data.get("modelID") or "unknown")
+        provider = str(data.get("providerID") or "")
+
+        # Prefer direct cost from the data when available.
+        try:
+            data_cost = float(data.get("cost") or 0.0)
+        except (TypeError, ValueError):
+            data_cost = 0.0
+        if data_cost > 0:
+            cost = data_cost
+        else:
+            cost = self.pricing_db.get_cost(model, input_t, output_t, cache_r, cache_w)
+
+        return {
+            "source": self.source_name,
+            "model": model,
+            "provider": provider,
+            "input": input_t,
+            "output": output_t,
+            "cacheRead": cache_r,
+            "cacheWrite": cache_w,
+            "reasoning": reasoning,
+            "cost": cost,
+            "timestamp": int(ts_ms),
+        }
+
+    def _file_signatures(self) -> tuple:
+        if not self.db_path.exists():
+            return ()
+        out: list[tuple[str, int, int]] = []
+        for candidate in (self.db_path, Path(str(self.db_path) + "-wal"), Path(str(self.db_path) + "-shm")):
+            try:
+                s = candidate.stat()
+                out.append((str(candidate), s.st_mtime_ns, s.st_size))
+            except (FileNotFoundError, OSError):
+                continue
+        return tuple(out)
+
+    def _parse_all(self) -> List[Dict[str, Any]]:
+        return []
+
+    def collect(self, since_date: Optional[datetime] = None, until_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        sig = (self._file_signatures(), self._pricing_signature())
+        if sig != type(self)._query_cache_sig:
+            type(self)._query_cache.clear()
+            type(self)._query_cache_sig = sig
+
+        s_ms = int(self._to_utc(since_date).timestamp() * 1000) if since_date else 0
+        u_ms = int(self._to_utc(until_date).timestamp() * 1000) if until_date else 9999999999999
+        cache_key = (s_ms, u_ms)
+
+        cached = type(self)._query_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
+        out: List[Dict[str, Any]] = []
+        if self.db_path.exists():
+            try:
+                conn = sqlite3.connect(str(self.db_path))
+                try:
+                    cur = conn.cursor()
+                    imported_ids = _mimo_imported_message_ids(conn)
+                    cur.execute(
+                        """
+                        SELECT id, data, time_created
+                        FROM message
+                        WHERE time_created >= ? AND time_created < ?
+                        ORDER BY time_created
+                        """,
+                        (s_ms, u_ms),
+                    )
+                    rows = cur.fetchall()
+                finally:
+                    conn.close()
+                for msg_id, data_json, ts_ms in rows:
+                    try:
+                        if str(msg_id) in imported_ids:
+                            continue
+                        data = json.loads(data_json)
+                        if data.get("role") != "assistant":
+                            continue
+                        tokens = data.get("tokens")
+                        if not isinstance(tokens, dict):
+                            continue
+                        entry = self._build_entry(data, self._i(ts_ms))
+                        entry["entry_id"] = f"mimo:{msg_id}"
+                        out.append(entry)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if len(type(self)._query_cache) >= _OPENCODE_QUERY_CACHE_MAX:
+            type(self)._query_cache.clear()
+        type(self)._query_cache[cache_key] = out
+        return list(out)
+
+
 class CodingToolsUsageTracker:
     """Registry-driven tracker for coding clients."""
 
@@ -1941,6 +2139,7 @@ class CodingToolsUsageTracker:
             "pi_agent": PiAgentParser(self.pricing_db),
             "copilot_cli": CopilotCLIParser(self.pricing_db),
             "hermes": HermesParser(self.pricing_db),
+            "mimo": MimoParser(self.pricing_db),
         }
 
     def collect(self, since_date: Optional[datetime] = None, until_date: Optional[datetime] = None, sources: Optional[List[str]] = None):
@@ -1970,7 +2169,7 @@ def main():
     parser.add_argument("--since", type=str)
     parser.add_argument("--until", type=str)
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--sources", type=str, default="opencode,codex,claude,gemini_cli,antigravity_cli,amp,kimi,pi_agent,copilot_cli,hermes")
+    parser.add_argument("--sources", type=str, default="opencode,codex,claude,gemini_cli,antigravity_cli,amp,kimi,pi_agent,copilot_cli,hermes,mimo")
     args = parser.parse_args()
 
     since_date, until_date = _date_range(args)

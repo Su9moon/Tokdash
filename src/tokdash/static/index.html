@@ -1288,6 +1288,65 @@
         </div>
       </section>
 
+      <section class="surface p-5 mb-6">
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 class="text-base font-extrabold mono" data-i18n="mimoSessions">Mimo Sessions</h2>
+            <p class="text-xs mt-1" style="color: var(--color-muted);" data-i18n="sessionsRangeDesc">Latest session plus sessions for the selected range.</p>
+          </div>
+        </div>
+        <div id="mimoLatestSession" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4 mb-5">
+          <div class="surface p-4">
+            <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="latestSession">Latest Session</div>
+            <div id="mimoLatestProject" class="mt-2 font-extrabold mono">Loading…</div>
+            <div id="mimoLatestMeta" class="text-sm mt-1" style="color: var(--color-muted);">-</div>
+          </div>
+          <div class="surface p-4">
+            <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="input">Input</div>
+            <div id="mimoLatestInput" class="mt-2 font-extrabold">-</div>
+          </div>
+          <div class="surface p-4">
+            <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="cacheRead">Cache Read</div>
+            <div id="mimoLatestCache" class="mt-2 font-extrabold">-</div>
+            <div id="mimoLatestCachePct" class="text-sm mt-1" style="color: var(--color-muted);">-</div>
+          </div>
+          <div class="surface p-4">
+            <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="output">Output</div>
+            <div id="mimoLatestOutput" class="mt-2 font-extrabold">-</div>
+          </div>
+          <div class="surface p-4">
+            <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalTokens">Total Tokens</div>
+            <div id="mimoLatestTotal" class="mt-2 font-extrabold">-</div>
+          </div>
+          <div class="surface p-4">
+            <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="events">Events</div>
+            <div id="mimoLatestEvents" class="mt-2 font-extrabold">-</div>
+            <div id="mimoLatestSeen" class="text-sm mt-1" style="color: var(--color-muted);">-</div>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm session-table" aria-label="Mimo sessions table" data-panel="mimo">
+            <colgroup><col style="width:18%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:11%"><col style="width:9%"><col style="width:13%"></colgroup>
+            <thead>
+              <tr class="border-b" style="border-color: var(--color-border);">
+                <th class="text-left py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="session" data-sortable="display_name">Session</th>
+                <th class="text-left py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="model">Model</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="input" data-sortable="tokens_in">Input</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="cache" data-sortable="tokens_cache">Cache</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="hitPct" data-sortable="cache_hit_rate">Hit %</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="output" data-sortable="tokens_out">Output</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="total" data-sortable="tokens">Total</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="cost" data-sortable="cost">Cost</th>
+                <th class="text-right py-3 px-4 font-semibold" style="color: var(--color-muted);" data-i18n="lastUpdated" data-sortable="last_seen_at">Last updated</th>
+              </tr>
+            </thead>
+            <tbody id="mimoSessionsTable">
+              <tr><td colspan="9" class="text-center py-10" style="color: var(--color-muted);" data-i18n="loading">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="surface p-5">
         <div class="flex items-center justify-between gap-3 mb-4">
           <div>
@@ -1854,8 +1913,8 @@
     let refreshCooldownTimer = null;
     let refreshCooldownRemaining = 0;
     let lastUsageResponse = null;
-    const SESSION_TOOL_KEYS = ['codex', 'claude', 'opencode', 'pi_agent'];
-    let lastSessionsResponses = { codex: null, claude: null, opencode: null, pi_agent: null, combined: null };
+    const SESSION_TOOL_KEYS = ['codex', 'claude', 'opencode', 'pi_agent', 'mimo'];
+    let lastSessionsResponses = { codex: null, claude: null, opencode: null, pi_agent: null, mimo: null, combined: null };
     let lastCombinedModels = [];
     let lastAppsBreakdown = null;
     let lastByTool = {};
@@ -2040,6 +2099,7 @@
         claudeSessions: 'Claude Code Sessions',
         opencodeSessions: 'OpenCode Sessions',
         piSessions: 'Pi Sessions',
+        mimoSessions: 'Mimo Sessions',
         combinedSessions: 'Combined Sessions',
         combinedSessionsDesc: 'Cross-tool session view grouped by project for the selected range.',
         sessionsRangeDesc: 'Latest session plus sessions for the selected range.',
@@ -2269,6 +2329,7 @@
         claudeSessions: 'Claude Code 会话',
         opencodeSessions: 'OpenCode 会话',
         piSessions: 'Pi 会话',
+        mimoSessions: 'Mimo 会话',
         combinedSessions: '合并会话',
         combinedSessionsDesc: '按项目汇总所选时间范围内的跨工具会话视图。',
         sessionsRangeDesc: '显示最近一条会话摘要，以及所选时间范围内的会话列表。',
@@ -2950,6 +3011,7 @@
         pi_agent: 'Pi',
         copilot_cli: 'GitHub Copilot CLI',
         hermes: 'Hermes',
+        mimo: 'Mimo',
       };
       if (mapping[key]) return mapping[key];
 
@@ -3622,6 +3684,7 @@
       claude: { ...DEFAULT_SORT },
       opencode: { ...DEFAULT_SORT },
       pi_agent: { ...DEFAULT_SORT },
+      mimo: { ...DEFAULT_SORT },
       combined: { ...DEFAULT_SORT },
     };
 
@@ -3852,6 +3915,7 @@
       updateSessionPanel("claude", lastSessionsResponses.claude);
       updateSessionPanel("opencode", lastSessionsResponses.opencode);
       updateSessionPanel("pi_agent", lastSessionsResponses.pi_agent);
+      updateSessionPanel("mimo", lastSessionsResponses.mimo);
       lastSessionsResponses.combined = buildCombinedSessionsData(lastSessionsResponses);
       updateSessionPanel("combined", lastSessionsResponses.combined, { showTool: true });
 
@@ -3860,6 +3924,7 @@
       initSortHeaders("claude", renderSessionsTab);
       initSortHeaders("opencode", renderSessionsTab);
       initSortHeaders("pi_agent", renderSessionsTab);
+      initSortHeaders("mimo", renderSessionsTab);
       initSortHeaders("combined", renderSessionsTab);
     }
 

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.1.4 - 2026-07-10
+
+### Fixed
+- Fixed Codex quota parsing for live API `used_percent` values between 0 and 1: Codex reports percentages on a 0-100 scale, so `1` now means 1% used instead of being normalized to 100% used. A one-time quota DB repair corrects already-stored mis-scaled Codex API rows when their raw payload proves the original value.
+
+### Added
+- Added official OpenAI GPT-5.6 standard short-context pricing for `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` to the bundled pricing DB.
+
 ## 1.1.3 - 2026-07-07
 
 ### Fixed

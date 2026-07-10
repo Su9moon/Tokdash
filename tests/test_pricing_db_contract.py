@@ -36,6 +36,26 @@ def test_manual_models_resolve():
     assert cost > 0.0, "kimi-k2.6 should resolve"
 
 
+def test_gpt_5_6_family_pricing():
+    """GPT-5.6 family entries must match OpenAI standard short-context pricing."""
+    db = PricingDatabase()
+
+    expected = {
+        "gpt-5.6-sol": (5.0, 30.0, 0.5, 6.25),
+        "gpt-5.6-terra": (2.5, 15.0, 0.25, 3.125),
+        "gpt-5.6-luna": (1.0, 6.0, 0.10, 1.25),
+    }
+    for model, (input_price, output_price, cache_read_price, cache_write_price) in expected.items():
+        cost = db.get_cost(model, 1000, 2000, 3000, 4000)
+        expected_cost = (
+            1000 * input_price
+            + 2000 * output_price
+            + 3000 * cache_read_price
+            + 4000 * cache_write_price
+        ) / 1_000_000
+        assert abs(cost - expected_cost) < 1e-12, f"{model!r} pricing should match official table"
+
+
 def test_alias_entries_resolve():
     """All aliases in pricing_db.json must resolve to a real model."""
     db = PricingDatabase()

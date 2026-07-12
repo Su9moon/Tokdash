@@ -237,6 +237,29 @@ def quota_state(store: UsageEntryStore | None = None) -> dict[str, Any]:
             and str(r.get("source")) == "codex_session"
         )
     ]
+    # The Codex endpoint can temporarily return only the weekly window. Current cards
+    # must reflect that payload exactly; older per-bucket rows remain available to history.
+    if "codex" in network_only:
+        codex_api_usage_times = [
+            int(row.get("captured_at") or 0)
+            for row in bucket_rows
+            if str(row.get("provider")) == "codex"
+            and str(row.get("source")) == "codex_api"
+            and row.get("bucket") not in {"api", "reset_credits"}
+        ]
+        if codex_api_usage_times:
+            current_codex_api_at = max(codex_api_usage_times)
+            bucket_rows = [
+                row
+                for row in bucket_rows
+                if not (
+                    str(row.get("provider")) == "codex"
+                    and str(row.get("source")) == "codex_api"
+                    and row.get("bucket") not in {"api", "reset_credits"}
+                    and int(row.get("captured_at") or 0) != current_codex_api_at
+                )
+            ]
+
     for row in _freshest_usage_rows(bucket_rows):
         provider = str(row.get("provider") or "")
         if provider not in providers:

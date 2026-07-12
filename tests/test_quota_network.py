@@ -495,6 +495,56 @@ def test_codex_usage_nested_primary_secondary_windows_parse_inline(monkeypatch, 
     assert all(s.plan == "pro" for s in by_bucket.values())
 
 
+def test_codex_usage_classifies_single_weekly_primary_by_duration(monkeypatch, tmp_path):
+    """A temporary weekly-only response must not synthesize or mislabel a 5h window."""
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    token = _jwt({"exp": 4_000_000_000})
+    (codex_home / "auth.json").write_text(json.dumps({"tokens": {"access_token": token}}), encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    def opener(req, timeout=15):
+        if req.full_url.endswith("/wham/usage"):
+            return FakeResponse(
+                {
+                    "plan_type": "prolite",
+                    "rate_limit": {
+                        "primary_window": {
+                            "limit_window_seconds": 604800,
+                            "reset_at": 1_784_365_006,
+                            "used_percent": 61,
+                        },
+                        "secondary_window": None,
+                    },
+                    "additional_rate_limits": [
+                        {
+                            "limit_name": "GPT-5.3-Codex-Spark",
+                            "metered_feature": "codex_bengalfox",
+                            "rate_limit": {
+                                "primary_window": {
+                                    "limit_window_seconds": 604800,
+                                    "reset_at": 1_784_399_038,
+                                    "used_percent": 32,
+                                },
+                                "secondary_window": None,
+                            },
+                        }
+                    ],
+                }
+            )
+        return FakeResponse({"available_count": 0, "credits": []})
+
+    snapshots = codex.collect_codex_api_snapshots(opener=opener, now=1_783_880_575)
+    by_bucket = {snapshot.bucket: snapshot for snapshot in snapshots}
+
+    assert "5h" not in by_bucket
+    assert by_bucket["7d"].used_percent == 61.0
+    assert by_bucket["7d"].resets_at == 1_784_365_006
+    assert "codex_bengalfox_5h" not in by_bucket
+    assert by_bucket["codex_bengalfox_7d"].used_percent == 32.0
+    assert by_bucket["codex_bengalfox_7d"].resets_at == 1_784_399_038
+
+
 def test_codex_usage_nested_one_percent_is_not_scaled_to_full(monkeypatch, tmp_path):
     """Real wham/usage uses a 0-100 percent scale; 1 means 1%, not a unit fraction."""
     codex_home = tmp_path / ".codex"

@@ -54,6 +54,47 @@ def _first_present(data: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _window_seconds(payload: dict[str, Any]) -> int:
+    try:
+        seconds = _first_present(payload, "limit_window_seconds", "window_seconds")
+        if seconds is not None:
+            return int(float(seconds))
+        minutes = payload.get("window_minutes")
+        return int(float(minutes) * 60) if minutes is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _canonical_nested_windows(container: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
+    """Map nested Codex windows by duration rather than field position.
+
+    The API normally puts the 5-hour limit in ``primary_window`` and the weekly limit
+    in ``secondary_window``. When one window is idle, however, it can omit that window
+    and move the remaining weekly limit into ``primary_window``. Duration is therefore
+    authoritative; the field name is only a fallback for legacy payloads without it.
+    """
+    positional = (
+        ("5h", container.get("primary_window")),
+        ("7d", container.get("secondary_window")),
+    )
+    present = [(fallback, value) for fallback, value in positional if isinstance(value, dict)]
+    if not present:
+        return None
+
+    windows: dict[str, dict[str, Any]] = {}
+    duration_aware = False
+    for fallback, payload in present:
+        seconds = _window_seconds(payload)
+        if seconds:
+            duration_aware = True
+            bucket = "7d" if seconds >= 24 * 60 * 60 else "5h"
+        else:
+            bucket = fallback
+        windows.setdefault(bucket, payload)
+
+    return windows
+
+
 def _decode_jwt_payload(token: str) -> dict[str, Any]:
     try:
         part = str(token).split(".")[1]
@@ -409,17 +450,14 @@ def collect_codex_api_snapshots(
             continue  # older synthetic shape without metered_feature; already folded into the main 7d bucket above
         nested = item.get("rate_limit") if isinstance(item.get("rate_limit"), dict) else item
         limit_name = str(item.get("limit_name") or metered_feature)
-        primary_window = nested.get("primary_window") if isinstance(nested.get("primary_window"), dict) else None
-        secondary_window = nested.get("secondary_window") if isinstance(nested.get("secondary_window"), dict) else None
+        canonical_windows = _canonical_nested_windows(nested)
         windows: list[tuple[str, str, dict[str, Any]]]
-        if primary_window is not None or secondary_window is not None:
-            # Real wham/usage shape: the additional limit carries BOTH a 5h and a 7d
-            # window -- emit one bucket per present window instead of collapsing to one.
+        if canonical_windows is not None:
             windows = []
-            if primary_window is not None:
-                windows.append((f"{metered_feature}_5h", f"{limit_name} · 5-hour", primary_window))
-            if secondary_window is not None:
-                windows.append((f"{metered_feature}_7d", f"{limit_name} · 7-day", secondary_window))
+            if "5h" in canonical_windows:
+                windows.append((f"{metered_feature}_5h", f"{limit_name} · 5-hour", canonical_windows["5h"]))
+            if "7d" in canonical_windows:
+                windows.append((f"{metered_feature}_7d", f"{limit_name} · 7-day", canonical_windows["7d"]))
         else:
             # Older/synthetic shape: "rate_limit" (or the item itself) IS the single window
             # payload. Keep the legacy unsuffixed bucket id for backward compatibility.
@@ -467,14 +505,12 @@ def _usage_rate_limits(usage: dict[str, Any]) -> dict[str, Any]:
 
     single = usage.get("rate_limit") if isinstance(usage.get("rate_limit"), dict) else None
     if single is not None:
-        primary_window = single.get("primary_window") if isinstance(single.get("primary_window"), dict) else None
-        secondary_window = single.get("secondary_window") if isinstance(single.get("secondary_window"), dict) else None
-        if primary_window is not None or secondary_window is not None:
-            # Real wham/usage shape: nested windows.
-            if primary_window is not None and not isinstance(rate_limits.get("primary"), dict):
-                rate_limits["primary"] = primary_window
-            if secondary_window is not None and not isinstance(rate_limits.get("secondary"), dict):
-                rate_limits["secondary"] = secondary_window
+        canonical_windows = _canonical_nested_windows(single)
+        if canonical_windows is not None:
+            if "5h" in canonical_windows and not isinstance(rate_limits.get("primary"), dict):
+                rate_limits["primary"] = canonical_windows["5h"]
+            if "7d" in canonical_windows and not isinstance(rate_limits.get("secondary"), dict):
+                rate_limits["secondary"] = canonical_windows["7d"]
         elif not isinstance(rate_limits.get("primary"), dict):
             # Older synthetic shape: "rate_limit" IS the primary window payload.
             rate_limits["primary"] = single

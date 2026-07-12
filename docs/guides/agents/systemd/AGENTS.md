@@ -77,10 +77,10 @@ Goal: help the user install Tokdash and keep it running in the background for lo
 6. Show where logs are:
    - systemd: `journalctl --user -u tokdash -f`
    - launchd: `/tmp/tokdash.out.log` and `/tmp/tokdash.err.log` (or whatever the plist sets)
-7. Linux optional: if the user wants a watchdog-style backstop, install the health-probe timer from `docs/agents/systemd/health-probe/`:
+7. Linux optional: if the user wants a watchdog-style backstop, install the health-probe timer from `docs/guides/agents/systemd/health-probe/`:
    ```bash
-   install -Dm644 docs/agents/systemd/health-probe/tokdash-health.service ~/.config/systemd/user/tokdash-health.service
-   install -Dm644 docs/agents/systemd/health-probe/tokdash-health.timer ~/.config/systemd/user/tokdash-health.timer
+   install -Dm644 docs/guides/agents/systemd/health-probe/tokdash-health.service ~/.config/systemd/user/tokdash-health.service
+   install -Dm644 docs/guides/agents/systemd/health-probe/tokdash-health.timer ~/.config/systemd/user/tokdash-health.timer
    systemctl --user daemon-reload
    systemctl --user enable --now tokdash-health.timer
    ```
@@ -94,4 +94,4 @@ Goal: help the user install Tokdash and keep it running in the background for lo
 - Prefer `tailscale serve` over `0.0.0.0` for remote access.
 - If the user asks for `0.0.0.0`, warn them that anyone on the LAN may be able to access the dashboard unless they add auth / firewall rules.
 
-Reference: `https://github.com/JingbiaoMei/tokdash/blob/main/docs/agents/systemd/BACKGROUND_RUN.md`.
+Reference: `https://github.com/JingbiaoMei/tokdash/blob/main/docs/guides/agents/systemd/BACKGROUND_RUN.md`.

@@ -7,7 +7,7 @@ Tokdash recomputes everything live from client logs, so history erodes when a cl
 old logs — notably **Claude Code** and **Gemini CLI** (30-day default cleanup). **Decision
 (2026-06): use config-based retention** — keep each client's own logs by raising/disabling its
 cleanup window — rather than building an in-app snapshot store. Rationale, the full per-client
-survey, and the one-line fixes live in [`docs/HISTORY_RETENTION.md`](HISTORY_RETENTION.md). A
+survey, and the one-line fixes live in [`docs/HISTORY_RETENTION.md`](../reference/HISTORY_RETENTION.md). A
 fully-reviewed design for an in-app snapshot/durable store is **parked** in
 [`docs/SNAPSHOTS_PLAN.md`](SNAPSHOTS_PLAN.md), to revisit only if a client ships
 non-disable-able cleanup or multi-machine history sync becomes a goal.
@@ -53,14 +53,14 @@ _Phased approach:_
 6. ✅ Added GitHub Actions Trusted Publishing (OIDC) to publish to PyPI on version tags.
 
 ## Serving / background process
-✅ We **document** background options but do not auto-install services. See `docs/agents/systemd/BACKGROUND_RUN.md`.
+✅ We **document** background options but do not auto-install services. See `docs/guides/agents/systemd/BACKGROUND_RUN.md`.
 
 - **Linux (recommended):** systemd *user* service template.
 - **macOS:** launchd plist template.
 - **Cross-platform fallbacks:** `tmux`, `nohup`, `screen`.
 - Templates:
-  - `docs/agents/systemd/templates/tokdash.service`
-  - `docs/agents/systemd/templates/com.tokdash.tokdash.plist`
+  - `docs/guides/agents/systemd/templates/tokdash.service`
+  - `docs/guides/agents/systemd/templates/com.tokdash.tokdash.plist`
 
 ## Terminal mode (interactive TUI)
 Decision: build a **full interactive** terminal UI (like `nvitop`/`nvtop`), as an optional extra.

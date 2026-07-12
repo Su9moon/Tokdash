@@ -38,7 +38,7 @@ dependencies = [
 Homepage = "https://github.com/JingbiaoMei/tokdash"
 Repository = "https://github.com/JingbiaoMei/tokdash"
 Issues = "https://github.com/JingbiaoMei/tokdash/issues"
-Changelog = "https://github.com/JingbiaoMei/tokdash/blob/main/docs/CHANGELOG.md"
+Changelog = "https://github.com/JingbiaoMei/tokdash/blob/main/docs/development/CHANGELOG.md"
 
 [project.scripts]
 tokdash = "tokdash.cli:main"

@@ -413,6 +413,7 @@ class CodexParser(BaseParser):
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
         self.sessions_dir = clientpaths.codex_sessions_dir()
+        self.replay_events_skipped = 0
 
     @staticmethod
     def _infer_provider(model: str, fallback: str = "openai") -> str:
@@ -430,12 +431,17 @@ class CodexParser(BaseParser):
 
     def _parse_all(self) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
+        self.replay_events_skipped = 0
 
         for path_str, _, _ in self._file_signatures():
             session_file = Path(path_str)
             try:
                 model = "gpt-5.3-codex"
                 provider = "openai"
+                own_session_id = None
+                current_session_id = None
+                subagent_parent_id = None
+                is_subagent_file = False
 
                 for line_no, line in enumerate(session_file.read_text(encoding="utf-8").splitlines(), start=1):
                     try:
@@ -447,11 +453,46 @@ class CodexParser(BaseParser):
                     if msg.get("type") == "turn_context" and p.get("model"):
                         model = str(p.get("model"))
                         provider = self._infer_provider(model, provider)
-                    elif msg.get("type") == "session_meta" and p.get("model_provider"):
-                        provider = str(p.get("model_provider"))
+                    elif msg.get("type") == "session_meta":
+                        sid = p.get("id")
+                        if sid:
+                            sid = str(sid)
+                            if own_session_id is None:
+                                own_session_id = sid
+                                # First session_meta identifies the file. A thread_spawn subagent file
+                                # replays ancestor history; capture the declared parent so we skip only
+                                # those replays (never the subagent's own or a stray id).
+                                source = p.get("source")
+                                subagent = source.get("subagent") if isinstance(source, dict) else None
+                                if isinstance(subagent, dict) and isinstance(subagent.get("thread_spawn"), dict):
+                                    is_subagent_file = True
+                                    pid = (subagent.get("thread_spawn") or {}).get("parent_thread_id")
+                                    subagent_parent_id = str(pid) if pid else None
+                            current_session_id = sid
+                        if p.get("model_provider"):
+                            provider = str(p.get("model_provider"))
 
                     if msg.get("type") != "event_msg" or p.get("type") != "token_count":
                         continue
+
+                    # Skip replayed parent token_count events, but ONLY in confirmed thread_spawn subagent
+                    # rollout files (the gate), and only for events attributed to the declared parent thread
+                    # (fallback: any non-own session id if parent_thread_id is absent). Ordinary primary/
+                    # guardian sessions are never gated, so a primary session that switches session ids
+                    # (e.g. compaction) is never under-counted. On an unrecognised format change the gate
+                    # fails to False -> nothing skipped -> loud over-count, not silent data loss.
+                    # Observed against Codex CLI 0.144.1; nested subagents (depth>1) may over-count
+                    # grandparent replays (the safe/loud direction). See
+                    # docs/development/internals/CODEX_USAGE_COUNTING.md.
+                    if is_subagent_file and own_session_id is not None and current_session_id is not None:
+                        is_replay = (
+                            current_session_id == subagent_parent_id
+                            if subagent_parent_id is not None
+                            else current_session_id != own_session_id
+                        )
+                        if is_replay:
+                            self.replay_events_skipped += 1
+                            continue
 
                     ts_raw = msg.get("timestamp")
                     if not ts_raw:
@@ -698,7 +739,7 @@ class GeminiCLIParser(BaseParser):
         # so subtract to recover the fresh/uncached portion — matching the Codex and
         # Copilot parsers. Without this, cached tokens are double-counted (once in
         # input, once as cacheRead), inflating Gemini totals, cost, and depressing the
-        # cache-hit rate. See docs/CHANGELOG.md.
+        # cache-hit rate. See docs/development/CHANGELOG.md.
         input_t = max(0, raw_input - cache_r)
         reasoning = self._i(tokens.get("thoughts"))
         provider = "google"

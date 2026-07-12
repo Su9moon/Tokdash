@@ -38,7 +38,7 @@ as non-loopback):
   same-origin gated, so another localhost port can't read it).
 
 For setup commands and a comparison of remote-access methods, see
-[`REMOTE_ACCESS.md`](REMOTE_ACCESS.md). Prefer Tailscale Serve or `ssh -L` forwarding over a
+[`REMOTE_ACCESS.md`](guides/REMOTE_ACCESS.md). Prefer Tailscale Serve or `ssh -L` forwarding over a
 non-loopback bind.
 The two differ for **writes**: **Tailscale Serve** requests are effectively read-only (their
 foreign `Host` / `https` `Origin` fail the allowlist), but an **`ssh -L` forward to
@@ -68,7 +68,7 @@ are still required for every mutating request.
 On WSL2, bind to `127.0.0.1` (the default), not `0.0.0.0`. Windows' localhost forwarding into
 WSL preserves a loopback `Host` header, so the guarded writes above keep working from Windows;
 binding `0.0.0.0` makes the effective bind non-loopback and disables writes entirely (see
-[`REMOTE_ACCESS.md`](REMOTE_ACCESS.md)).
+[`REMOTE_ACCESS.md`](guides/REMOTE_ACCESS.md)).
 
 ## Quota tracking
 

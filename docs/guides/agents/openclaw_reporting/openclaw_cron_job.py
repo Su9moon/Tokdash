@@ -6,7 +6,7 @@ Intended for:
 - manual usage (run once)
 - cron jobs (scheduled reports)
 
-Repo location: docs/agents/openclaw_reporting/openclaw_cron_job.py
+Repo location: docs/guides/agents/openclaw_reporting/openclaw_cron_job.py
 
 It reads the Tokdash API:
   GET /api/usage?period=<period>

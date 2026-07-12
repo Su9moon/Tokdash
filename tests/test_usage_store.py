@@ -8,7 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import tokdash.sessions as sessions_module
-from tokdash.sources.coding_tools import BaseParser, CodingToolsUsageTracker, _sig_cache
+from tokdash.pricing import PricingDatabase
+from tokdash.sources.coding_tools import BaseParser, CodexParser, CodingToolsUsageTracker, _sig_cache
 from tokdash.usage_store import UsageEntryStore, build_source_signature, parser_code_signature
 
 
@@ -549,6 +550,230 @@ def test_codex_guardian_sessions_are_hidden_from_session_view_only(monkeypatch, 
     tracker = CodingToolsUsageTracker()
     codex_entries = tracker.parsers["codex"].collect()
     assert len(codex_entries) == 2
+
+
+def _codex_token_count_row(ts: str, tokens_in: int, tokens_cache: int, tokens_out: int, tokens_reasoning: int) -> dict:
+    return {
+        "timestamp": ts,
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "last_token_usage": {
+                    "input_tokens": tokens_in,
+                    "cached_input_tokens": tokens_cache,
+                    "output_tokens": tokens_out,
+                    "reasoning_output_tokens": tokens_reasoning,
+                }
+            },
+        },
+    }
+
+
+def test_codex_subagent_thread_spawn_replay_is_skipped(monkeypatch, tmp_path):
+    """Codex MultiAgent V2 `thread_spawn` subagent rollout files replay the parent
+    thread's entire `session_meta` + `token_count` history under the parent's session
+    ID. Both parsers must skip `token_count` events whose current session ID differs
+    from the file's own (first-`session_meta`) session ID, so the replay inflates
+    neither the Overview tab nor the Sessions tab (where it would otherwise clobber
+    the parent session's real turns)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    _clear_parser_caches()
+
+    parent_id = "019f5168-1796-7532-97b4-6570dc76a98d"
+    sub_id = "019f524d-0461-7a13-8c1e-6570dc76a98e"
+
+    codex_dir = tmp_path / ".codex" / "sessions" / "2026" / "07" / "11"
+
+    parent_rows = [
+        {
+            "timestamp": "2026-07-11T14:40:04.000Z",
+            "type": "session_meta",
+            "payload": {"id": parent_id, "cwd": "/work/tokdash", "source": "vscode", "model_provider": "openai"},
+        },
+        {
+            "timestamp": "2026-07-11T14:40:05.000Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-sol", "cwd": "/work/tokdash"},
+        },
+        _codex_token_count_row("2026-07-11T14:40:10.000Z", 100, 10, 20, 5),
+        _codex_token_count_row("2026-07-11T14:41:10.000Z", 101, 10, 20, 5),
+        _codex_token_count_row("2026-07-11T14:42:10.000Z", 102, 10, 20, 5),
+    ]
+    # N = 3 real token_count events belonging to the parent's own session ID.
+    parent_turn_count = 3
+
+    subagent_rows = [
+        # Own session_meta carries the thread_spawn marker distinguishing it from a
+        # guardian (`source.subagent.other == "guardian"`) session.
+        {
+            "timestamp": "2026-07-11T18:50:06.000Z",
+            "type": "session_meta",
+            "payload": {
+                "id": sub_id,
+                "cwd": "/work/tokdash",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent_id,
+                            "depth": 1,
+                            "agent_path": "/root/fix-bug",
+                            "agent_nickname": "worker",
+                            "agent_role": None,
+                        }
+                    }
+                },
+                "model_provider": "openai",
+            },
+        },
+        # Replayed parent session_meta (same id as parent_rows[0]) + turn_context.
+        {
+            "timestamp": "2026-07-11T18:50:07.000Z",
+            "type": "session_meta",
+            "payload": {"id": parent_id, "cwd": "/work/tokdash", "source": "vscode", "model_provider": "openai"},
+        },
+        {
+            "timestamp": "2026-07-11T18:50:08.000Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-sol", "cwd": "/work/tokdash"},
+        },
+        # Replayed copies of the parent's token_count events (timestamp-shifted, same
+        # fingerprints) attributed to the parent's session ID, not the subagent's own.
+        _codex_token_count_row("2026-07-11T18:50:20.000Z", 100, 10, 20, 5),
+        _codex_token_count_row("2026-07-11T18:50:21.000Z", 101, 10, 20, 5),
+        _codex_token_count_row("2026-07-11T18:50:22.000Z", 102, 10, 20, 5),
+    ]
+
+    _write_jsonl(codex_dir / "rollout-parent.jsonl", parent_rows)
+    _write_jsonl(codex_dir / "rollout-subagent.jsonl", subagent_rows)
+
+    # --- Overview tab: CodexParser._parse_all must emit exactly N entries, none of
+    # which come from the replayed subagent file. ---
+    parser = CodexParser(PricingDatabase())
+    entries = parser._parse_all()
+    assert len(entries) == parent_turn_count
+    assert parser.replay_events_skipped == 3   # the 3 replayed parent events were skipped
+    parent_file_str = str(codex_dir / "rollout-parent.jsonl")
+    assert all(entry["entry_id"].startswith(f"{parent_file_str}:") for entry in entries)
+
+    # --- Sessions tab: the subagent file yields zero own-session turns -> None (so it
+    # can no longer overwrite/clobber the parent's real session in _load_codex_sessions).
+    sub_path = codex_dir / "rollout-subagent.jsonl"
+    sub_stat = sub_path.stat()
+    sub_raw = sessions_module._parse_codex_session_file(str(sub_path), sub_stat.st_mtime_ns, sub_stat.st_size, ())
+    assert sub_raw is None
+
+    parent_path = codex_dir / "rollout-parent.jsonl"
+    parent_stat = parent_path.stat()
+    parent_raw = sessions_module._parse_codex_session_file(
+        str(parent_path), parent_stat.st_mtime_ns, parent_stat.st_size, ()
+    )
+    assert parent_raw is not None
+    assert parent_raw["session_id"] == parent_id
+    assert len(parent_raw["turns"]) == parent_turn_count
+
+    # --- Guardrail: a primary file with multiple session_meta lines that all carry the
+    # SAME id (e.g. a resumed/continued session) must keep all of its events - the skip
+    # must not trigger on same-ID session_meta repeats. ---
+    same_id = "same-id-primary-session"
+    # Isolated under a separate HOME so CodexParser's rglob over ~/.codex/sessions
+    # doesn't also pick up the parent/subagent files written above.
+    guardrail_home = tmp_path / "guardrail-home"
+    same_id_dir = guardrail_home / ".codex" / "sessions" / "2026" / "07" / "12"
+    same_id_rows = [
+        {
+            "timestamp": "2026-07-12T09:00:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": same_id, "cwd": "/work/tokdash", "source": "cli", "model_provider": "openai"},
+        },
+        {
+            "timestamp": "2026-07-12T09:00:01.000Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-sol", "cwd": "/work/tokdash"},
+        },
+        _codex_token_count_row("2026-07-12T09:00:02.000Z", 50, 5, 10, 2),
+        # A second session_meta line with the SAME id (e.g. resumed session), followed
+        # by another real token_count event that must not be dropped.
+        {
+            "timestamp": "2026-07-12T09:05:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": same_id, "cwd": "/work/tokdash", "source": "cli", "model_provider": "openai"},
+        },
+        _codex_token_count_row("2026-07-12T09:05:02.000Z", 60, 6, 12, 3),
+    ]
+    _write_jsonl(same_id_dir / "rollout-same-id.jsonl", same_id_rows)
+
+    monkeypatch.setenv("HOME", str(guardrail_home))
+    monkeypatch.setattr(Path, "home", lambda: guardrail_home)
+    _clear_parser_caches()
+    same_id_parser = CodexParser(PricingDatabase())
+    same_id_entries = same_id_parser._parse_all()
+    assert len(same_id_entries) == 2
+
+    same_id_path = same_id_dir / "rollout-same-id.jsonl"
+    same_id_stat = same_id_path.stat()
+    same_id_raw = sessions_module._parse_codex_session_file(
+        str(same_id_path), same_id_stat.st_mtime_ns, same_id_stat.st_size, ()
+    )
+    assert same_id_raw is not None
+    assert len(same_id_raw["turns"]) == 2
+
+
+def test_codex_primary_session_id_change_is_not_skipped(monkeypatch, tmp_path):
+    """The hardened skip is gated on positive `thread_spawn` subagent detection (see
+    docs/development/internals/CODEX_USAGE_COUNTING.md). A PRIMARY file (no
+    thread_spawn marker) whose `session_meta.id` changes mid-file - e.g. a compaction or
+    fork that mints a new session id - must never have its real events skipped just
+    because `current_session_id != own_session_id`. This is the guardrail against the
+    dangerous silent-under-count direction."""
+    primary_home = tmp_path / "primary-home"
+    primary_dir = primary_home / ".codex" / "sessions" / "2026" / "07" / "13"
+
+    id_a = "session-id-a"
+    id_b = "session-id-b"
+
+    primary_rows = [
+        {
+            "timestamp": "2026-07-13T09:00:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": id_a, "cwd": "/work/tokdash", "source": "vscode", "model_provider": "openai"},
+        },
+        {
+            "timestamp": "2026-07-13T09:00:01.000Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-sol", "cwd": "/work/tokdash"},
+        },
+        _codex_token_count_row("2026-07-13T09:00:02.000Z", 50, 5, 10, 2),
+        # session_meta.id CHANGES mid-file (e.g. compaction/fork) - no thread_spawn marker
+        # anywhere in this file, so it must never be treated as a subagent rollout.
+        {
+            "timestamp": "2026-07-13T09:05:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": id_b, "cwd": "/work/tokdash", "source": "vscode", "model_provider": "openai"},
+        },
+        _codex_token_count_row("2026-07-13T09:05:02.000Z", 60, 6, 12, 3),
+    ]
+    _write_jsonl(primary_dir / "rollout-primary.jsonl", primary_rows)
+
+    monkeypatch.setenv("HOME", str(primary_home))
+    monkeypatch.setattr(Path, "home", lambda: primary_home)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    _clear_parser_caches()
+
+    parser = CodexParser(PricingDatabase())
+    entries = parser._parse_all()
+    assert len(entries) == 2
+    assert parser.replay_events_skipped == 0
+
+    primary_path = primary_dir / "rollout-primary.jsonl"
+    primary_stat = primary_path.stat()
+    primary_raw = sessions_module._parse_codex_session_file(
+        str(primary_path), primary_stat.st_mtime_ns, primary_stat.st_size, ()
+    )
+    assert primary_raw is not None
+    assert len(primary_raw["turns"]) == 2
 
 
 def test_codex_sessions_echo_effective_review_default(monkeypatch, tmp_path):

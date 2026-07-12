@@ -22,11 +22,11 @@ which tokdash
 
 ### 2) Create the service file
 
-Copy `docs/agents/systemd/templates/tokdash.service` to:
+Copy `docs/guides/agents/systemd/templates/tokdash.service` to:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp docs/agents/systemd/templates/tokdash.service ~/.config/systemd/user/tokdash.service
+cp docs/guides/agents/systemd/templates/tokdash.service ~/.config/systemd/user/tokdash.service
 ```
 
 Edit `ExecStart=` to point at your `tokdash` binary (or set it to an absolute path to your venv binary). The template passes `--no-open` because the service runs headless and should not try to launch a browser.
@@ -51,8 +51,8 @@ restarts `tokdash.service` if the process is alive but no longer answering. This
 is a safety net for overload or wedge scenarios; normal installs can skip it.
 
 ```bash
-install -Dm644 docs/agents/systemd/health-probe/tokdash-health.service ~/.config/systemd/user/tokdash-health.service
-install -Dm644 docs/agents/systemd/health-probe/tokdash-health.timer ~/.config/systemd/user/tokdash-health.timer
+install -Dm644 docs/guides/agents/systemd/health-probe/tokdash-health.service ~/.config/systemd/user/tokdash-health.service
+install -Dm644 docs/guides/agents/systemd/health-probe/tokdash-health.timer ~/.config/systemd/user/tokdash-health.timer
 systemctl --user daemon-reload
 systemctl --user enable --now tokdash-health.timer
 ```
@@ -89,11 +89,11 @@ which tokdash
 
 ### 2) Install the LaunchAgent plist
 
-Copy `docs/agents/systemd/templates/com.tokdash.tokdash.plist` to:
+Copy `docs/guides/agents/systemd/templates/com.tokdash.tokdash.plist` to:
 
 ```bash
 mkdir -p ~/Library/LaunchAgents
-cp docs/agents/systemd/templates/com.tokdash.tokdash.plist ~/Library/LaunchAgents/com.tokdash.tokdash.plist
+cp docs/guides/agents/systemd/templates/com.tokdash.tokdash.plist ~/Library/LaunchAgents/com.tokdash.tokdash.plist
 ```
 
 Edit the plist to set the correct `ProgramArguments` path for your `tokdash` binary and adjust `--bind/--port` as desired. The template passes `--no-open` so the headless agent does not try to launch a browser.

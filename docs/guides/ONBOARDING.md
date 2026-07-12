@@ -137,7 +137,7 @@ it only prints remote-access guidance. SSH forwarding supports authenticated wri
 an explicit non-loopback bind remains read-only.
 
 See [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) for commands, URLs, WSL2 guidance, and the trade-offs
-between Tailscale Serve, SSH forwarding, and wildcard binding. See [`SECURITY.md`](SECURITY.md)
+between Tailscale Serve, SSH forwarding, and wildcard binding. See [`SECURITY.md`](../SECURITY.md)
 for the complete write-protection model.
 
 ## `tokdash doctor`

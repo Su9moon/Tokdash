@@ -1,0 +1,31 @@
+# Tokdash docs
+
+## Root
+
+- [Contributing](CONTRIBUTING.md) — how to propose changes and the manual release checklist pointer.
+- [Security policy](SECURITY.md) — how to report a vulnerability and the write-protection model.
+
+## guides/ — task-oriented setup guides
+
+- [Onboarding](guides/ONBOARDING.md) — `setup`, `doctor`, `update`, and `uninstall`, Tokdash's Python-native service lifecycle.
+- [Remote access](guides/REMOTE_ACCESS.md) — reaching a Tokdash instance from another machine (Tailscale Serve, SSH forwarding, wildcard binding).
+- [Statusline templates](guides/statusline/README.md) — ready-made Claude Code statusline scripts (bash + PowerShell) that read local Tokdash totals.
+- [Background service & agents](guides/agents/systemd/BACKGROUND_RUN.md) — run Tokdash as a systemd/launchd service, the health-probe auto-restart, and the OpenClaw reporting cron.
+
+## reference/ — lookup material
+
+- [API reference](reference/API.md) — the local HTTP API (FastAPI) for token usage, costs, and session data.
+- [Supported clients](reference/SUPPORTED_CLIENTS.md) — which coding tools Tokdash reads usage from and how detection works.
+- [History retention](reference/HISTORY_RETENTION.md) — why Tokdash's past months can shrink, and how to prevent it.
+
+## development/ — maintainer workflows, release history, and design notes
+
+- [Changelog](development/CHANGELOG.md) — notable changes to the project, release by release.
+- [Releasing](development/RELEASING.md) — checklist for manual PyPI/Git tag/GitHub Releases publishing.
+- [Roadmap](development/ROADMAP.md) — notes on planned and deferred work.
+
+### development/internals/ — design notes and research
+
+- [Codex usage counting](development/internals/CODEX_USAGE_COUNTING.md) — how Tokdash avoids double-counting Codex usage from MultiAgent V2 subagent replay.
+- [Windows support plan](development/internals/WINDOWS_SUPPORT_PLAN.md) — status and design of native Windows support.
+- [Windows client data paths](development/internals/WINDOWS_CLIENT_PATHS.md) — research backing the Windows-support pass, per-client path survey.

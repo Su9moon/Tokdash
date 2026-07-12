@@ -30,4 +30,4 @@ Tokdash reads usage **locally** from each tool's own session/log files — nothi
 
 ---
 
-← Back to the [README](../README.md) · [中文 README](../README_CN.md)
+← Back to the [README](../../README.md) · [中文 README](../../README_CN.md)

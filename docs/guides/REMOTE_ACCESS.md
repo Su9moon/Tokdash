@@ -127,4 +127,4 @@ visible and explicitly confirmed.
 
 WSL detection, a private IP address, and network reachability are not authentication signals.
 Tokdash therefore does not treat WSL or `0.0.0.0` as trusted for writes. See
-[`SECURITY.md`](SECURITY.md) for the complete write-protection model.
+[`SECURITY.md`](../SECURITY.md) for the complete write-protection model.

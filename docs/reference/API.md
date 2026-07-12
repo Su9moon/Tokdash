@@ -9,7 +9,7 @@ Tokdash exposes a local HTTP API (FastAPI) for querying token usage, costs, and 
 
 All endpoints return JSON. The API is unauthenticated and intended to bind to loopback
 only. **State-changing requests are gated** (loopback bind + Host/Origin allowlist +
-per-session token); see [`docs/SECURITY.md`](SECURITY.md) and `PUT /api/pricing-db` below.
+per-session token); see [`docs/SECURITY.md`](../SECURITY.md) and `PUT /api/pricing-db` below.
 
 ---
 
@@ -103,7 +103,7 @@ read it).
 
 ## `GET /api/update-check`
 
-Opt-in, default-off PyPI version check (see `docs/ONBOARDING.md` → Update checks). **Read-only**
+Opt-in, default-off PyPI version check (see `docs/guides/ONBOARDING.md` → Update checks). **Read-only**
 — PyPI read plus an in-memory cache, no disk write — so it is served as `GET` and is **not**
 write-gated; it works over Tailscale/WSL/any forward like `GET /api/quota/refresh` (see
 `docs/SECURITY.md`). No-op unless update checks are enabled (`TOKDASH_UPDATE_CHECK=1` or saved
@@ -213,7 +213,7 @@ Persists the quota master switch and background poll interval to `<data_dir>/con
 
 ## `GET /api/quota/refresh`
 
-Runs an immediate network poll for consented providers and stores snapshots in the local usage DB. This only reads providers' usage endpoints (no quota is consumed), so it is served as `GET`, not write-gated, and works over Tailscale Serve/WSL/any forward — see [`SECURITY.md`](SECURITY.md#quota-refresh-and-update-check-are-read-only-gets). It is still rate-limited with a 60 second cooldown (`429`). It never refreshes provider tokens; expired tokens produce stale-token snapshots. Returns `409` when quota tracking is disabled (master switch off or `TOKDASH_QUOTA_POLL=0`).
+Runs an immediate network poll for consented providers and stores snapshots in the local usage DB. This only reads providers' usage endpoints (no quota is consumed), so it is served as `GET`, not write-gated, and works over Tailscale Serve/WSL/any forward — see [`SECURITY.md`](../SECURITY.md#quota-refresh-and-update-check-are-read-only-gets). It is still rate-limited with a 60 second cooldown (`429`). It never refreshes provider tokens; expired tokens produce stale-token snapshots. Returns `409` when quota tracking is disabled (master switch off or `TOKDASH_QUOTA_POLL=0`).
 
 **Response**
 ```json
@@ -504,7 +504,7 @@ curl -s -X PUT http://127.0.0.1:55423/api/pricing-db \
 
 ## Integration Example: Claude Code Status Line
 
-> **Ready-made templates:** [`docs/examples/statusline/`](examples/statusline/) ships a minimal and a full statusline script plus install/config notes. The snippet below is the minimal one, reproduced here for reference.
+> **Ready-made templates:** [`docs/guides/statusline/`](../guides/statusline/) ships a minimal and a full statusline script plus install/config notes. The snippet below is the minimal one, reproduced here for reference.
 
 Tokdash's `/api/usage` endpoint is well suited for embedding daily totals into the Claude Code status line. The snippet below queries today's usage with a 1-second timeout, falls back silently if tokdash is unreachable, and renders a compact summary like `📊 69.9M ($55.64) today`.
 

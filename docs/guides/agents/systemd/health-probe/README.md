@@ -25,8 +25,8 @@ it should keep answering while workers are busy.
 Run from the repository root:
 
 ```sh
-install -Dm644 docs/agents/systemd/health-probe/tokdash-health.service ~/.config/systemd/user/tokdash-health.service
-install -Dm644 docs/agents/systemd/health-probe/tokdash-health.timer ~/.config/systemd/user/tokdash-health.timer
+install -Dm644 docs/guides/agents/systemd/health-probe/tokdash-health.service ~/.config/systemd/user/tokdash-health.service
+install -Dm644 docs/guides/agents/systemd/health-probe/tokdash-health.timer ~/.config/systemd/user/tokdash-health.timer
 systemctl --user daemon-reload
 systemctl --user enable --now tokdash-health.timer
 ```

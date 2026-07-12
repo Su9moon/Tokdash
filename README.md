@@ -45,7 +45,7 @@
 ## Table of Contents
 
 - [Features](#features)
-- [Supported clients](docs/SUPPORTED_CLIENTS.md)
+- [Supported clients](docs/reference/SUPPORTED_CLIENTS.md)
 - [Quick start](#quick-start)
   - [Platform support](#platform-support)
 - [Configuration](#configuration)
@@ -55,6 +55,7 @@
 - [History retention](#history-retention)
 - [Roadmap](#roadmap)
 - [Contributing / security](#contributing--security)
+- [Documentation](#documentation)
 - [Project structure](#project-structure)
 - [License](#license)
 
@@ -115,7 +116,7 @@
 ### Prerequisites
 
 - Python **3.10+**
-- One or more [supported clients](docs/SUPPORTED_CLIENTS.md) installed
+- One or more [supported clients](docs/reference/SUPPORTED_CLIENTS.md) installed
 
 ### Install
 
@@ -146,7 +147,7 @@ uses localhost-first defaults, does not require `sudo` for the local service, an
 usage history unless you later uninstall with `--purge`.
 
 To expose the dashboard explicitly on all network interfaces with writes disabled, run
-`tokdash setup --bind 0.0.0.0`; review the [remote-access guide](docs/REMOTE_ACCESS.md) first.
+`tokdash setup --bind 0.0.0.0`; review the [remote-access guide](docs/guides/REMOTE_ACCESS.md) first.
 
 For a non-interactive setup from an agent, script, or bundle:
 
@@ -227,7 +228,7 @@ tailnet device. Use SSH forwarding when you need authenticated write access. An 
 `--bind 0.0.0.0` provides read-only network access but exposes the unauthenticated dashboard on
 every reachable interface.
 
-See **[`docs/REMOTE_ACCESS.md`](docs/REMOTE_ACCESS.md)** for setup commands, WSL2 guidance,
+See **[`docs/guides/REMOTE_ACCESS.md`](docs/guides/REMOTE_ACCESS.md)** for setup commands, WSL2 guidance,
 access URLs, write behavior, and security trade-offs.
 
 ### Foreground fallback
@@ -242,7 +243,7 @@ Open `http://127.0.0.1:55423`. Use `tokdash serve --port <port>` if the default 
 
 For full onboarding details, including runtime choices, WSL/systemd behavior, macOS launchd,
 Tailscale, bundling, update checks, and safe uninstall semantics, see
-**[`docs/ONBOARDING.md`](docs/ONBOARDING.md)**.
+**[`docs/guides/ONBOARDING.md`](docs/guides/ONBOARDING.md)**.
 
 
 ### OpenClaw digest (scheduled reports)
@@ -255,7 +256,7 @@ Copy and paste this prompt to your LLM agent (Claude Code, AmpCode, Cursor, etc.
 
 ```text
 Install and configure scheduled Tokdash usage reports for OpenClaw by following the instructions here:
-https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/openclaw_reporting/AGENTS.md
+https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/guides/agents/openclaw_reporting/AGENTS.md
 
 Or read the guide yourself, but seriously, let an agent do it.
 ```
@@ -265,22 +266,22 @@ Or read the guide yourself, but seriously, let an agent do it.
 Fetch the installation guide and follow it:
 
 ```bash
-curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/openclaw_reporting/AGENTS.md
+curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/guides/agents/openclaw_reporting/AGENTS.md
 ```
 
 ### Statusline integration
 
 The local API can power a statusline item in your coding agent (Claude Code, etc.) showing live token/cost stats.
 
-**Ready-made templates** live in [`docs/examples/statusline/`](docs/examples/statusline/) — copy one into `~/.claude/scripts/` and add the `statusLine` block to `~/.claude/settings.json`:
+**Ready-made templates** live in [`docs/guides/statusline/`](docs/guides/statusline/) — copy one into `~/.claude/scripts/` and add the `statusLine` block to `~/.claude/settings.json`:
 
-- [`statusline-minimal.sh`](docs/examples/statusline/statusline-minimal.sh) → one line: `[Claude Sonnet 4.6] 📁 myproject | 📊 12.3M ($4.56) today`
-- [`statusline-full.sh`](docs/examples/statusline/statusline-full.sh) → a four-row dashboard with today + week totals and a top-3 per-tool breakdown
-- [`statusline.ps1`](docs/examples/statusline/statusline.ps1) → the same one-line output as the minimal template, for Claude Code running natively on Windows (PowerShell, no `curl`/`jq` needed)
+- [`statusline-minimal.sh`](docs/guides/statusline/statusline-minimal.sh) → one line: `[Claude Sonnet 4.6] 📁 myproject | 📊 12.3M ($4.56) today`
+- [`statusline-full.sh`](docs/guides/statusline/statusline-full.sh) → a four-row dashboard with today + week totals and a top-3 per-tool breakdown
+- [`statusline.ps1`](docs/guides/statusline/statusline.ps1) → the same one-line output as the minimal template, for Claude Code running natively on Windows (PowerShell, no `curl`/`jq` needed)
 
-All are read-only, localhost-only, and fail silently if Tokdash isn't running. See the [folder README](docs/examples/statusline/README.md) for install/config and [`docs/API.md`](docs/API.md) for the endpoint reference.
+All are read-only, localhost-only, and fail silently if Tokdash isn't running. See the [folder README](docs/guides/statusline/README.md) for install/config and [`docs/reference/API.md`](docs/reference/API.md) for the endpoint reference.
 
-Prefer to roll your own? Hand your agent this prompt and point it at [`docs/API.md`](docs/API.md):
+Prefer to roll your own? Hand your agent this prompt and point it at [`docs/reference/API.md`](docs/reference/API.md):
 
 > *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
 
@@ -325,7 +326,7 @@ tokdash db watch --pretty
 ```
 
 For remote access through Tailscale Serve, SSH forwarding, or an explicit network bind, see
-[`docs/REMOTE_ACCESS.md`](docs/REMOTE_ACCESS.md). Interactive `tokdash setup` can configure and
+[`docs/guides/REMOTE_ACCESS.md`](docs/guides/REMOTE_ACCESS.md). Interactive `tokdash setup` can configure and
 record the Tailscale Serve rule after you opt in.
 
 By default `tokdash serve` opens the dashboard in your browser once on startup. Pass `--no-open` to disable this (it is also skipped automatically in headless/SSH environments and in the background service templates).
@@ -333,9 +334,9 @@ By default `tokdash serve` opens the dashboard in your browser once on startup. 
 ## Privacy & security
 
 - **No telemetry**: Tokdash does not intentionally send your data anywhere.
-- **Local parsing**: usage is computed from local session files (see [supported clients](docs/SUPPORTED_CLIENTS.md)).
+- **Local parsing**: usage is computed from local session files (see [supported clients](docs/reference/SUPPORTED_CLIENTS.md)).
 - **Optional quota polling**: the Quota tab is local-only by default. Per-provider API polling can be enabled from the tab or with `tokdash quota consent`; it uses your local CLI credentials only to call that provider's own quota endpoint, and stores responses in the local usage SQLite DB.
-- **Server exposure**: Tokdash binds to `127.0.0.1` by default. Tailscale Serve provides private read-only access, SSH forwarding provides authenticated write access, and `--bind 0.0.0.0` explicitly exposes unauthenticated reads on every interface. See the [remote-access guide](docs/REMOTE_ACCESS.md).
+- **Server exposure**: Tokdash binds to `127.0.0.1` by default. Tailscale Serve provides private read-only access, SSH forwarding provides authenticated write access, and `--bind 0.0.0.0` explicitly exposes unauthenticated reads on every interface. See the [remote-access guide](docs/guides/REMOTE_ACCESS.md).
 
 ### Quota tracking (optional)
 
@@ -376,7 +377,7 @@ Example:
 curl 'http://127.0.0.1:55423/api/usage?period=today'
 ```
 
-Full API reference: [`docs/API.md`](docs/API.md) — schema, parameters, and response shapes for every endpoint.
+Full API reference: [`docs/reference/API.md`](docs/reference/API.md) — schema, parameters, and response shapes for every endpoint.
 
 ## Cost Accuracy Note
 
@@ -395,16 +396,24 @@ Tokdash reads each client's **local** session logs and also keeps a local SQLite
   { "general": { "sessionRetention": { "enabled": false } } }
   ```
 
-Every other supported client keeps history indefinitely by default. For the full per-client survey, fix details, and what the local SQLite index does and does not preserve, see **[docs/HISTORY_RETENTION.md](docs/HISTORY_RETENTION.md)**.
+Every other supported client keeps history indefinitely by default. For the full per-client survey, fix details, and what the local SQLite index does and does not preserve, see **[docs/reference/HISTORY_RETENTION.md](docs/reference/HISTORY_RETENTION.md)**.
 
 ## Roadmap
 
-See `docs/ROADMAP.md`.
+See `docs/development/ROADMAP.md`.
 
 ## Contributing / security
 
 - Contributing guide: `docs/CONTRIBUTING.md`
 - Security policy: `docs/SECURITY.md`
+
+## Documentation
+
+Full documentation lives in **[`docs/`](docs/README.md)** (start at the index), grouped into:
+
+- **[guides/](docs/guides/)** — task-oriented setup: onboarding, remote access, statusline, background service.
+- **[reference/](docs/reference/)** — lookup material: API reference, supported clients, history retention.
+- **[development/](docs/development/)** — changelog, releasing, roadmap, and `internals/` design notes.
 
 ## Project structure
 
@@ -430,7 +439,10 @@ tokdash/
 │           ├── index.html        # Single-page dashboard
 │           ├── theme-config.js   # Theme palettes & heatmap colors
 │           └── themes.css        # Per-theme CSS overrides
-└── docs/                   # Onboarding guide, API docs, release notes, and agent prompts
+└── docs/                   # Documentation — see docs/README.md for the index
+    ├── guides/             # Onboarding, remote access, statusline, background service
+    ├── reference/          # API reference, supported clients, history retention
+    └── development/        # Changelog, releasing, roadmap, internals/ design notes
 ```
 
 ## License

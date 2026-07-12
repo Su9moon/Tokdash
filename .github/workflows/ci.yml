@@ -37,7 +37,7 @@ jobs:
           python -m pip install pytest
 
       - name: Compile
-        run: python -m compileall -q src/tokdash main.py docs/agents/openclaw_reporting/openclaw_cron_job.py
+        run: python -m compileall -q src/tokdash main.py docs/guides/agents/openclaw_reporting/openclaw_cron_job.py
 
       - name: Test
         run: pytest -q

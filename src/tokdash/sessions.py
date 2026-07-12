@@ -438,6 +438,9 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
         return None
 
     session_id = session_path.stem
+    own_session_id = None
+    subagent_parent_id = None
+    is_subagent_file = False
     current_model = "gpt-5.3-codex"
     current_provider = "openai"
     cwd = ""
@@ -458,7 +461,20 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
             obj_type = obj.get("type")
 
             if obj_type == "session_meta":
-                session_id = str(payload.get("id") or session_id)
+                meta_id = payload.get("id")
+                if meta_id:
+                    session_id = str(meta_id)      # current (last-seen) session id
+                    if own_session_id is None:
+                        own_session_id = session_id
+                        # First session_meta identifies the file. A thread_spawn subagent file
+                        # replays ancestor history; capture the declared parent so we skip only
+                        # those replays (never the subagent's own or a stray id).
+                        source = payload.get("source")
+                        subagent = source.get("subagent") if isinstance(source, dict) else None
+                        if isinstance(subagent, dict) and isinstance(subagent.get("thread_spawn"), dict):
+                            is_subagent_file = True
+                            pid = (subagent.get("thread_spawn") or {}).get("parent_thread_id")
+                            subagent_parent_id = str(pid) if pid else None
                 cwd = str(payload.get("cwd") or cwd)
                 repo_url = str(((payload.get("git") or {}).get("repository_url")) or repo_url)
                 is_review_session = is_review_session or _is_codex_guardian_session(payload)
@@ -478,6 +494,17 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
 
             if obj_type != "event_msg" or payload.get("type") != "token_count":
                 continue
+
+            # Skip replayed parent token_count events only in thread_spawn subagent files, matched
+            # to the declared parent (see ROBUSTNESS.md / coding_tools.py for the rationale).
+            if is_subagent_file and own_session_id is not None:
+                is_replay = (
+                    session_id == subagent_parent_id
+                    if subagent_parent_id is not None
+                    else session_id != own_session_id
+                )
+                if is_replay:
+                    continue
 
             timestamp_ms = _parse_iso_to_ms(obj.get("timestamp"))
             if timestamp_ms is None:

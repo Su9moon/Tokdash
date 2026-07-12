@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+- **Codex MultiAgent V2 subagent replay double-count.** When a Codex session spawns a subagent (`thread_spawn`), the subagent's rollout file replays the parent thread's `token_count` history under the parent's session id. Those replayed events are log artifacts, not new API calls, but the parser counted each one — inflating a model's Overview usage several-fold when multiple subagents replay the same parent, and overwriting the parent's real turns on the Sessions tab. The Codex parsers now detect subagent rollout files via `source.subagent.thread_spawn` and skip `token_count` events attributed to the declared `parent_thread_id`, while keeping the subagent's own real usage and guardian (`codex-auto-review`) sessions untouched; an unrecognized format change degrades to over-counting (visible) rather than silent under-counting. Nested subagents (non-default `agents.max_depth > 1`) remain a documented limitation that errs toward over-counting. The persistent usage store rebuilds affected Codex rows automatically on upgrade (the parser-code signature is part of the parse-cache key), so no manual step is needed. See [`docs/development/internals/CODEX_USAGE_COUNTING.md`](internals/CODEX_USAGE_COUNTING.md).
+
 ## 1.1.5 - 2026-07-11
 
 ### Added
@@ -56,7 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Added a **Quota tab** tracking subscription quota for Codex, Claude Code, and Antigravity: per-window remaining bars with reset countdowns, Codex reset-credit inventory, remaining/consumption history charts with range and provider-visibility controls, and per-provider consent cards. Provider API polling is opt-in per provider and **off by default**; without consent the tab uses local data only (see "Quota tracking (optional)" in the README and `docs/SECURITY.md`).
-- Added quota API routes: `GET /api/quota` and `GET /api/quota/history`, plus write-gated `POST /api/quota/consent`, `POST /api/quota/settings`, and `POST /api/quota/refresh` (60-second cooldown). Documented in `docs/API.md`.
+- Added quota API routes: `GET /api/quota` and `GET /api/quota/history`, plus write-gated `POST /api/quota/consent`, `POST /api/quota/settings`, and `POST /api/quota/refresh` (60-second cooldown). Documented in `docs/reference/API.md`.
 - Added `tokdash quota poll|show|consent` CLI verbs, an optional quota step in interactive `tokdash setup`, quota state in `tokdash doctor`, and `tokdash export --include-quota` (exports exclude quota data by default).
 - Added a background quota poller to `tokdash serve` (default every 30 minutes; `quota.poll_interval_minutes` in `config.json`, `TOKDASH_QUOTA_POLL_INTERVAL` env override, `TOKDASH_QUOTA_POLL=0` kill switch, `quota.enabled` master switch) with incremental watermark-based Codex session ingestion and a one-time history backfill.
 - Added `TOKDASH_QUOTA_RETENTION_DAYS` opt-in retention pruning for stored quota snapshots (default: off — snapshots are kept indefinitely).
@@ -84,7 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## 1.0.4 - 2026-06-22
 
 ### Added
-- Added ready-made Claude Code statusline templates under `docs/examples/statusline/`: a minimal one-line script and a fuller multi-row dashboard script that read local Tokdash usage totals without calling mutating endpoints.
+- Added ready-made Claude Code statusline templates under `docs/guides/statusline/`: a minimal one-line script and a fuller multi-row dashboard script that read local Tokdash usage totals without calling mutating endpoints.
 
 ### Fixed
 - Hardened interactive Tailscale Serve setup so the targeted teardown command is recorded before exposure, failed Serve attempts reconcile the manifest back to the unset state, and post-success URL write failures warn without crashing setup.
@@ -113,7 +118,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## 1.0.0 - 2026-06-21
 
 ### Added
-- Python-native lifecycle commands: `tokdash setup`, `doctor`, `update`, and `uninstall`. `setup` configures a reversible user-level background service (systemd user service on Linux/WSL2, launchd LaunchAgent on macOS) with no shell scripts and no `sudo`; `doctor` diagnoses runtime/service/port health; `update` upgrades a setup-owned runtime (pipx or managed venv) in place and restarts the service; `uninstall` reverses exactly what setup created, driven by a `<data_dir>/install.json` manifest and ownership markers, keeping usage history unless `--purge`. All commands support `--auto`/`--json` for bundlers and `--dry-run`. See `docs/ONBOARDING.md`.
+- Python-native lifecycle commands: `tokdash setup`, `doctor`, `update`, and `uninstall`. `setup` configures a reversible user-level background service (systemd user service on Linux/WSL2, launchd LaunchAgent on macOS) with no shell scripts and no `sudo`; `doctor` diagnoses runtime/service/port health; `update` upgrades a setup-owned runtime (pipx or managed venv) in place and restarts the service; `uninstall` reverses exactly what setup created, driven by a `<data_dir>/install.json` manifest and ownership markers, keeping usage history unless `--purge`. All commands support `--auto`/`--json` for bundlers and `--dry-run`. See `docs/guides/ONBOARDING.md`.
 - Optional, default-off update check (`TOKDASH_UPDATE_CHECK=1` or persisted consent via `POST /api/update-check/consent`): `tokdash doctor` and `POST /api/update-check` report whether a newer version is on PyPI (PEP 440 comparison). No automatic background checks; it only reports, never upgrades.
 - Dashboard pricing edits now persist to a user override at `<data_dir>/pricing_db.json` instead of the packaged baseline, so they survive `tokdash update` / a pip reinstall and work on a read-only install. The override fully replaces the baseline (WYSIWYG: deletions stick); a missing/corrupt override falls back to the shipped baseline.
 
@@ -184,7 +189,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `scripts/bench_openclaw.py` — a local benchmark helper for validating OpenClaw parser totals and cold/warm parse latency across common windows.
-- `docs/agents/systemd/health-probe/` — an optional systemd user timer + oneshot that restarts Tokdash if `/health` stops answering after several short attempts, turning an "alive but wedged" hang into automatic recovery.
+- `docs/guides/agents/systemd/health-probe/` — an optional systemd user timer + oneshot that restarts Tokdash if `/health` stops answering after several short attempts, turning an "alive but wedged" hang into automatic recovery.
 
 ### Changed
 - **OpenClaw cold-start performance.** OpenClaw session parsing now caches parsed entries by file signature and filters by date from memory, so repeated Overview/Stats calls no longer re-read the full OpenClaw log set. Startup warming also precomputes the dashboard's initial Overview and Stats cache keys, the Overview tab defers `/api/sessions` calls until the Sessions tab opens, and the frontend prefetches Stats in the background.
@@ -205,11 +210,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Install button for the PWA.** When the dashboard is installable (Chromium browsers, served with the manifest + service worker), an **Install** button appears in the header toolbar so you can pin Tokdash as a desktop/mobile app in one click. It hides itself automatically when the app is already installed or when the browser exposes no install prompt (e.g. iOS Safari).
-- **History-retention guidance.** The README now warns that Claude Code and Gemini CLI delete local sessions older than about 30 days by default, `tokdash serve` prints a one-time reminder with `TOKDASH_NO_RETENTION_NOTICE=1` as an escape hatch, and `docs/HISTORY_RETENTION.md` records the per-client retention survey plus the config-based fix.
+- **History-retention guidance.** The README now warns that Claude Code and Gemini CLI delete local sessions older than about 30 days by default, `tokdash serve` prints a one-time reminder with `TOKDASH_NO_RETENTION_NOTICE=1` as an escape hatch, and `docs/reference/HISTORY_RETENTION.md` records the per-client retention survey plus the config-based fix.
 
 ### Changed
 - Renamed the **pi-agent** client to **Pi** across the dashboard and docs. The detection path (`~/.pi/agent/sessions/`) and the `PI_AGENT_DIR` override are unchanged — this is a display-name change only.
-- README (English + 中文): added an agent logo strip under the tagline and moved the detailed client list + log paths to [`docs/SUPPORTED_CLIENTS.md`](SUPPORTED_CLIENTS.md). Demo links now point at `tokdash.github.io/demo/` (the root `tokdash.github.io` is the project home page).
+- README (English + 中文): added an agent logo strip under the tagline and moved the detailed client list + log paths to [`docs/reference/SUPPORTED_CLIENTS.md`](../reference/SUPPORTED_CLIENTS.md). Demo links now point at `tokdash.github.io/demo/` (the root `tokdash.github.io` is the project home page).
 - Deferred the in-app snapshot-store design in favor of keeping each client's own logs, with the full design retained in `docs/SNAPSHOTS_PLAN.md` for future revisit if client retention policies change.
 
 ### Fixed
@@ -276,12 +281,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added support for pi-agent token usage parsing from ~/.pi/agent/sessions/. Override the location via the `PI_AGENT_DIR` env var (comma-separated list of dirs). Captures input/output/cache tokens and per-message cost when present.
 - Added support for Hermes agent token usage parsing from ~/.hermes/state.db. Override the location via the `HERMES_HOME` env var. Reads session-level aggregates including per-session message counts, reasoning tokens, and recorded cost (with pricing-table fallback for subscription-included sessions where Hermes records a zero cost).
 - Added support for GitHub Copilot CLI token usage. Full input/cache/reasoning/cost data is read from OpenTelemetry exporter JSONL at ~/.copilot/otel/ or the file pointed at by `COPILOT_OTEL_FILE_EXPORTER_PATH`. For sessions without OTel enabled, output-only token counts are recovered from ~/.copilot/session-state/*/events.jsonl as a fallback.
-- Added [`docs/API.md`](API.md) — full HTTP API reference for the Tokdash server, intended for building external integrations (e.g. Claude Code statusline items, IDE plugins, custom dashboards).
+- Added [`docs/reference/API.md`](../reference/API.md) — full HTTP API reference for the Tokdash server, intended for building external integrations (e.g. Claude Code statusline items, IDE plugins, custom dashboards).
 
 ### Notes
 - To capture full GitHub Copilot CLI usage (input + cache + cost), set `COPILOT_OTEL_FILE_EXPORTER_PATH` in your shell profile before launching the Copilot CLI; e.g. `export COPILOT_OTEL_FILE_EXPORTER_PATH="$HOME/.copilot/otel/usage.jsonl"`. Without this, Tokdash will still surface output-token counts from the local events log.
 - The Sessions tab does not yet support pi-agent, GitHub Copilot CLI, or Hermes — these agents currently appear only in Overview/Stats aggregates. Per-session drill-down is planned for a follow-up.
-- **Statusline integration**: Tokdash's local HTTP API can power a Claude Code (or any other agent) statusline item showing live token/cost stats. Hand your coding agent the prompt below, plus [`docs/API.md`](API.md) for endpoint details:
+- **Statusline integration**: Tokdash's local HTTP API can power a Claude Code (or any other agent) statusline item showing live token/cost stats. Hand your coding agent the prompt below, plus [`docs/reference/API.md`](../reference/API.md) for endpoint details:
   > *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
 
 ## 0.2.7 - 2026-05-20
@@ -343,7 +348,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Added `Paper`, `Liquid`, `Vibrant`, `Midnight`, `Terminal`, `Brutalist`, `Arcade`, and `Studio` dashboard style themes, with localized labels in English and Chinese.
-- Added a dedicated `docs/RELEASING.md` checklist and linked it from `docs/CONTRIBUTING.md` so the manual tag, push, GitHub Release, and verification steps stay documented.
+- Added a dedicated `docs/development/RELEASING.md` checklist and linked it from `docs/CONTRIBUTING.md` so the manual tag, push, GitHub Release, and verification steps stay documented.
 
 ### Changed
 - Moved theme-specific palettes and overrides out of `src/tokdash/static/index.html` into standalone static assets, reducing dashboard-shell sprawl and making future theme work easier to maintain.

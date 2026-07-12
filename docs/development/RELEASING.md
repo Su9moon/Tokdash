@@ -7,7 +7,7 @@ Use this checklist for manual releases so the PyPI publish, Git tag, and GitHub 
 Before tagging:
 
 1. Ensure `pyproject.toml` and `src/tokdash/__init__.py` have the same version.
-2. Update `docs/CHANGELOG.md` with a new `## X.Y.Z - YYYY-MM-DD` section.
+2. Update `docs/development/CHANGELOG.md` with a new `## X.Y.Z - YYYY-MM-DD` section.
 3. If `README.md` changed this release, mirror the changes into `README_CN.md` so the English and 中文 READMEs stay in sync (sections, flags, and examples should match).
 4. Ensure the worktree is clean except for intended release changes.
 5. Run the test suite:
@@ -28,7 +28,7 @@ Push `main` first, then push the tag in sequence:
 ```bash
 VERSION=X.Y.Z
 
-git add pyproject.toml src/tokdash/__init__.py docs/CHANGELOG.md
+git add pyproject.toml src/tokdash/__init__.py docs/development/CHANGELOG.md
 git commit -m "Release v$VERSION"
 git tag -a "v$VERSION" -m "Release v$VERSION"
 git push origin main
@@ -52,7 +52,7 @@ awk -v v="$VERSION" '
   $0 ~ "^## " v " - " { flag = 1 }
   flag && $0 ~ /^## / && $0 !~ "^## " v " - " { exit }
   flag { print }
-' docs/CHANGELOG.md > /tmp/tokdash-release-notes.md
+' docs/development/CHANGELOG.md > /tmp/tokdash-release-notes.md
 
 gh release create "v$VERSION" \
   --title "v$VERSION" \

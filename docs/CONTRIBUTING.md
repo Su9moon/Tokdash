@@ -37,7 +37,7 @@ pytest -q
 
 ## Releases
 
-For the manual release checklist, see [RELEASING.md](RELEASING.md).
+For the manual release checklist, see [RELEASING.md](development/RELEASING.md).
 Important: pushing a tag is not enough to populate GitHub's Releases page. After tagging and pushing, also create the GitHub Release object for that tag.
 
 ## Security / secrets

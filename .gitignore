@@ -42,7 +42,10 @@ Thumbs.db
 # Private agent instructions (not for public release)
 AGENTS.md
 **/AGENTS.md
-docs/agents/release/release.py
+# ...but these two are PUBLIC documentation guides (linked from the READMEs); keep them tracked:
+!docs/guides/agents/openclaw_reporting/AGENTS.md
+!docs/guides/agents/systemd/AGENTS.md
+docs/guides/agents/release/release.py
 
 
 .playwright-mcp

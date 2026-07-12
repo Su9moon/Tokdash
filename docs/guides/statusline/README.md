@@ -99,7 +99,7 @@ All templates honor the same environment variables (set them in your shell profi
 
 ## What it queries
 
-Both templates read from Tokdash's `/api/usage` endpoint — see [`docs/API.md`](../../API.md) for the full reference. The minimal template makes one request for the configured period; the full template makes two read-only requests (`today` and `week`):
+Both templates read from Tokdash's `/api/usage` endpoint — see [`docs/reference/API.md`](../../reference/API.md) for the full reference. The minimal template makes one request for the configured period; the full template makes two read-only requests (`today` and `week`):
 
 ```
 GET /api/usage?period=today

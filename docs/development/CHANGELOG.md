@@ -4,10 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 1.2.0 - 2026-07-12
+
+### Added
+
+- Interactive `tokdash setup` now offers an explicit update-notice consent step. The prompt defaults to Yes, remains opt-in, and is skipped for automated, non-interactive, and non-TTY setup.
+- Added a documentation index at `docs/README.md`, with guides, reference material, and maintainer documentation organized into `docs/guides/`, `docs/reference/`, and `docs/development/`.
+- Added a detailed Codex usage-counting design note covering subagent replay detection, safety properties, verification, persistent-store behavior, and the accepted nested-subagent limitation.
+
+### Changed
+
+- Changed `/api/quota/refresh` from `POST` to `GET`. The endpoint polls providers' read-only usage APIs, remains subject to its cooldown and consent settings, and now works through Tailscale Serve, WSL forwarding, and other read-only remote paths.
+- Changed `/api/update-check` from `POST` to `GET`. The endpoint performs only the consented, cached PyPI version check and remains separate from the write-gated consent endpoint.
+- Updated the dashboard to use the new GET endpoints without CSRF tokens.
+- Reorganized documentation into task-oriented guides, API and client references, and development material. Updated both READMEs, CI paths, package metadata, internal references, and public agent guides for the new layout.
 
 ### Fixed
-- **Codex MultiAgent V2 subagent replay double-count.** When a Codex session spawns a subagent (`thread_spawn`), the subagent's rollout file replays the parent thread's `token_count` history under the parent's session id. Those replayed events are log artifacts, not new API calls, but the parser counted each one — inflating a model's Overview usage several-fold when multiple subagents replay the same parent, and overwriting the parent's real turns on the Sessions tab. The Codex parsers now detect subagent rollout files via `source.subagent.thread_spawn` and skip `token_count` events attributed to the declared `parent_thread_id`, while keeping the subagent's own real usage and guardian (`codex-auto-review`) sessions untouched; an unrecognized format change degrades to over-counting (visible) rather than silent under-counting. Nested subagents (non-default `agents.max_depth > 1`) remain a documented limitation that errs toward over-counting. The persistent usage store rebuilds affected Codex rows automatically on upgrade (the parser-code signature is part of the parse-cache key), so no manual step is needed. See [`docs/development/internals/CODEX_USAGE_COUNTING.md`](internals/CODEX_USAGE_COUNTING.md).
+
+- Fixed severe Codex usage inflation caused by MultiAgent V2 `thread_spawn` rollout files replaying their parent thread's `token_count` history. Tokdash now skips direct-parent replay events while preserving genuine subagent usage, primary sessions, and guardian review sessions.
+- Fixed Codex Sessions entries being overwritten by partial parent-history replays from subagent rollout files.
+- Fixed idle Codex quota windows displaying phantom reset times. A window with 0% usage now reports no reset until its rolling timer actually starts.
+- Prevented an idle-to-active Codex quota transition from being counted as false new consumption.
+- Made the update-check kill switch consistently recognize `0`, `false`, `no`, and `off`, including mixed-case and whitespace-padded values.
+
+### Upgrade notes
+
+- API integrations calling `POST /api/quota/refresh` or `POST /api/update-check` must switch to `GET`; the old methods are no longer registered.
+- The persistent usage store automatically reparses Codex rollout files after the parser upgrade, removing previously stored replay entries without requiring `tokdash db resync`.
+- Deduplication currently matches only the declared direct parent. With non-default `agents.max_depth > 1`, grandparent replay events may still be over-counted. This accepted limitation favors visible over-counting over silent deletion of legitimate usage.
 
 ## 1.1.5 - 2026-07-11
 

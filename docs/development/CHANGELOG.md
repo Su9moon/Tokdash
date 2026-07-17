@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.3.0 - 2026-07-16
+
+### Added
+
+- Kimi Code update support: usage tracking for the new `~/.kimi-code` data root and `usage.record` wire schema introduced in Kimi Code 0.26, with automatic fallback to legacy `~/.kimi` installs.
+- Kimi K3 pricing update: added `kimi-k3` launch pricing and the `kimi-code/k3` alias.
+
 ## 1.2.2 - 2026-07-14
 
 ### Fixed

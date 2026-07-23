@@ -10,7 +10,7 @@ function render(){const items=filtered();if(!items.some(x=>x.name===selected))se
 async function load(){
  root.innerHTML='<div class="card empty"><progress></progress><div>正在读取项目，请稍候…</div></div>';
  try {
-  let response=await fetch('/api/projects?period='+period.value+'&include_unmanaged='+(showAll?'true':'false'));
+  let response=await fetch('/api/projects?period='+period.value+'&include_unmanaged=true');
   let result=await response.json();
   while(result.loading){
    const status=await fetch('/api/projects/status?job='+encodeURIComponent(result.job)).then(r=>r.json());
@@ -25,6 +25,7 @@ async function load(){
  } catch(e) { root.innerHTML='<div class="card empty">加载失败：'+esc(e)+'</div>'; }
 }toggleUnmanaged.onclick=()=>{showAll=!showAll;toggleUnmanaged.textContent=showAll?'隐藏未接入':'显示全部项目';render()} ; [query,state,model].forEach(x=>x.oninput=render);period.onchange=load;refresh.onclick=load;load();
 </script></body></html>
+
 
 
 

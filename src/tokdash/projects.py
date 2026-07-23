@@ -130,7 +130,8 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
         claimed.update(aliases)
         matched = [item for item in sessions if str(item.get("project", "")).lower() in aliases]
         tasks = _task_rows(project_dir / "TASKS.md", project_dir, matched)
-        completed_tasks = [task for task in tasks if str(task.get("status", "")).lower() in {"completed", "complete", "done", "已完成", "完成"}]
+        valid_tasks = [task for task in tasks if str(task.get("status", "")).strip().lower() not in {"", "unavailable", "未知"}]
+        completed_tasks = [task for task in valid_tasks if str(task.get("status", "")).lower() in {"completed", "complete", "done", "已完成", "完成"}]
         measured_tokens = [task["tokens"] for task in tasks if task.get("tokens") is not None]
         measured_costs = [task["cost"] for task in tasks if task.get("cost") is not None]
         durations = [task["duration_minutes"] for task in tasks if task.get("duration_minutes") is not None]
@@ -145,7 +146,7 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
                 "task_count": len(tasks),
                 "tasks": tasks,
                 "efficiency": {
-                    "task_count": len(tasks),
+                    "task_count": len(valid_tasks),
                     "completed_count": len(completed_tasks),
                     "completion_rate": (len(completed_tasks) / len(tasks)) if tasks else None,
                     "duration_minutes": sum(durations) if durations else None,

@@ -77,10 +77,15 @@ def _project_dirs() -> list[Path]:
             continue
         if (root / "TASKS.md").exists():
             dirs.add(root)
-        for task_index in root.rglob("TASKS.md"):
-            # Ignore dependency/cache trees and avoid turning arbitrary task logs into projects.
-            if not {".git", "node_modules", ".venv", "vendor"}.intersection(task_index.parts):
-                dirs.add(task_index.parent)
+        # Do not recursively scan an entire document drive. Project roots are
+        # discovered from Tokdash session cwd values; only inspect immediate
+        # children here to recognize explicitly adopted folders.
+        try:
+            for child in root.iterdir():
+                if child.is_dir() and (child / "TASKS.md").exists():
+                    dirs.add(child)
+        except OSError:
+            pass
     return sorted(dirs, key=lambda item: item.name.lower())
 
 

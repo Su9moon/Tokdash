@@ -130,6 +130,11 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
         claimed.update(aliases)
         matched = [item for item in sessions if str(item.get("project", "")).lower() in aliases]
         tasks = _task_rows(project_dir / "TASKS.md", project_dir, matched)
+        completed_tasks = [task for task in tasks if str(task.get("status", "")).lower() in {"completed", "complete", "done", "已完成", "完成"}]
+        measured_tokens = [task["tokens"] for task in tasks if task.get("tokens") is not None]
+        measured_costs = [task["cost"] for task in tasks if task.get("cost") is not None]
+        durations = [task["duration_minutes"] for task in tasks if task.get("duration_minutes") is not None]
+        reworks = [int(task["rework_count"]) for task in tasks if str(task.get("rework_count", "")).isdigit()]
         projects.append(
             {
                 "name": project_dir.name,
@@ -139,6 +144,15 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
                 "managed": True,
                 "task_count": len(tasks),
                 "tasks": tasks,
+                "efficiency": {
+                    "task_count": len(tasks),
+                    "completed_count": len(completed_tasks),
+                    "completion_rate": (len(completed_tasks) / len(tasks)) if tasks else None,
+                    "duration_minutes": sum(durations) if durations else None,
+                    "tokens": sum(measured_tokens) if measured_tokens else None,
+                    "cost": sum(measured_costs) if measured_costs else None,
+                    "rework_count": sum(reworks) if reworks else None,
+                },
                 "session_count": len(matched),
                 "tokens": sum(int(item.get("tokens") or 0) for item in matched),
                 "cost": sum(float(item.get("cost") or 0) for item in matched),

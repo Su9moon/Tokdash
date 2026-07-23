@@ -83,7 +83,7 @@ def _project_dirs() -> list[Path]:
     return sorted(dirs, key=lambda item: item.name.lower())
 
 
-def get_projects_data(period: str = "365") -> dict[str, Any]:
+def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> dict[str, Any]:
     """Return managed projects plus every historical Codex session project."""
     sessions_data = get_sessions_data("codex", period, None, None, include_review_sessions=True)
     sessions = sessions_data.get("sessions", [])
@@ -111,6 +111,8 @@ def get_projects_data(period: str = "365") -> dict[str, Any]:
             }
         )
 
+    if not include_unmanaged:
+        return {"period": period, "roots": [str(item) for item in _roots()], "projects": projects, "complete": True}
     unclaimed: dict[str, list[dict[str, Any]]] = {}
     for session in sessions:
         name = str(session.get("project") or "未命名会话项目").strip() or "未命名会话项目"

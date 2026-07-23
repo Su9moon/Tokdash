@@ -1117,10 +1117,10 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
 
 
 @app.get("/api/projects")
-def get_projects(period: str = "365") -> Dict[str, Any]:
+def get_projects(period: str = "365", include_unmanaged: bool = False) -> Dict[str, Any]:
     """File-backed projects, tasks, and measured Codex session aggregates."""
     try:
-        return get_projects_data(period)
+        return get_projects_data(period, include_unmanaged=include_unmanaged)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

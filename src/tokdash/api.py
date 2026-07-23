@@ -8,6 +8,7 @@ import os
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -38,10 +39,13 @@ from .sessions import (
     get_sessions_data,
     reload_pricing_db,
 )
+from .projects import get_projects_data
 
 
 PRICING_DB_PATH = Path(__file__).parent / "pricing_db.json"
 logger = logging.getLogger(__name__)
+_PROJECT_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_PROJECT_JOBS: dict[str, dict[str, Any]] = {}
 BASE_PATH_PLACEHOLDER = "__TOKDASH_BASE_PATH__"
 SUPPORTED_BASE_PATHS = ("/tokdash",)
 
@@ -1113,6 +1117,72 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects")
+def get_projects(period: str = "365", include_unmanaged: bool = False) -> Dict[str, Any]:
+    """File-backed projects, tasks, and measured Codex session aggregates."""
+    try:
+        key = f"{period}:{include_unmanaged}"
+        job = _PROJECT_JOBS.get(key)
+        if job and not job["future"].done():
+            return {"loading": True, "job": key, "progress": job.get("progress", 10)}
+        if job and job["future"].done():
+            return job["future"].result()
+        future = _PROJECT_EXECUTOR.submit(get_projects_data, period, include_unmanaged)
+        _PROJECT_JOBS[key] = {"future": future, "progress": 10}
+        return {"loading": True, "job": key, "progress": 10}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/projects/status")
+def get_projects_status(job: str) -> Dict[str, Any]:
+    item = _PROJECT_JOBS.get(job)
+    if not item:
+        return {"loading": False, "error": "job not found"}
+    future = item["future"]
+    if not future.done():
+        return {"loading": True, "progress": 50}
+    try:
+        return {"loading": False, "data": future.result()}
+    except Exception as exc:
+        return {"loading": False, "error": str(exc)}
+
+@app.post("/api/projects/adopt")
+def adopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create the minimal file-backed onboarding marker for a selected project."""
+    from datetime import date
+    project_dir = Path(str(payload.get("path") or "")).expanduser().resolve()
+    if not project_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Project directory not found")
+    tasks = project_dir / "TASKS.md"
+    if not tasks.exists():
+        tasks.write_text(
+            "# Tasks\n\n| ID | Task | Status | Started | Report |\n| --- | --- | --- | --- | --- |\n"
+            f"| TASK-001 | Save-tokens onboarding | Active | {date.today().isoformat()} |  |\n",
+            encoding="utf-8",
+        )
+    get_projects_data.cache_clear()
+    get_sessions_data.cache_clear()
+    return {"path": str(project_dir), "managed": True}
+
+@app.post("/api/projects/unadopt")
+def unadopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove only Tokdash's onboarding marker; preserve project files and history."""
+    project_dir = Path(str(payload.get("path") or "")).expanduser().resolve()
+    marker = project_dir / ".tokdash-project.json"
+    disabled = project_dir / ".tokdash-disabled"
+    disabled.write_text("Tokdash adoption disabled\n", encoding="utf-8")
+    get_projects_data.cache_clear()
+    return {"path": str(project_dir), "managed": False}
+
+
+@app.get("/projects", response_class=HTMLResponse)
+async def serve_projects_dashboard():
+    page = STATIC_DIR / "projects.html"
+    if not page.exists():
+        return HTMLResponse(content="<h1>Projects dashboard not found</h1>", status_code=404)
+    return HTMLResponse(content=page.read_text(encoding="utf-8"), headers=NO_CACHE_HEADERS)
 
 
 @app.get("/health")

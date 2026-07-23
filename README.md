@@ -450,3 +450,13 @@ tokdash/
 ## License
 
 MIT License - see `LICENSE`.
+## Local Codex Projects and Tasks
+
+The local build provides a `/projects` page for viewing Codex sessions, workflow tasks, and efficiency metrics by project. Task data is read from `TASKS.md` and `tasks/TASK-xxx.md`; Token, cost, and `token_events` values come only from indexed Tokdash snapshots. Missing values are shown as `-` and are never estimated.
+
+- Managed projects are shown by default; unmanaged and closed projects can be revealed with the filters.
+- `Reload` clears project caches only when clicked. There is no automatic refresh and no service restart is required.
+- The task table includes status, start/completion time, duration, rework, negative ratings, Tokens, Token events, and cost.
+- `Enable / SAVE-TOKENS` is a read-only reminder. Enable the `save-tokens` skill in the relevant Codex conversation before creating a task.
+
+After starting the local service, open `http://127.0.0.1:55423/projects`.

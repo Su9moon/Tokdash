@@ -1138,6 +1138,7 @@ def adopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"| TASK-001 | Save-tokens onboarding | Active | {date.today().isoformat()} |  |\n",
             encoding="utf-8",
         )
+    get_projects_data.cache_clear()
     return {"path": str(project_dir), "managed": True}
 
 

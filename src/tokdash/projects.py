@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from datetime import datetime, timezone
@@ -83,6 +84,7 @@ def _project_dirs() -> list[Path]:
     return sorted(dirs, key=lambda item: item.name.lower())
 
 
+@lru_cache(maxsize=8)
 def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> dict[str, Any]:
     """Return managed projects plus every historical Codex session project."""
     sessions_data = get_sessions_data("codex", period, None, None, include_review_sessions=True)

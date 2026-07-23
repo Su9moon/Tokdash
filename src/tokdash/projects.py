@@ -36,6 +36,8 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
             task = {"id": col("id", "编号", fallback=cells[0]), "title": col("task", "任务", "title", fallback=cells[1]), "status": col("status", "状态", fallback=cells[2]), "started": col("started", "开始", "started_at")}
             task_file = project_dir / "tasks" / f"{task['id']}.md"
             task["completed"] = ""
+            task["outcome"] = "unavailable"
+            task["rework_count"] = "unavailable"
             task["updated"] = ""
             linked_ids: list[str] = []
             if task_file.exists():
@@ -46,6 +48,10 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                         task["completed"] = task_line.split(":", 1)[1].strip()
                     elif lower.startswith("updated:"):
                         task["updated"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("outcome:"):
+                        task["outcome"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("rework count:"):
+                        task["rework_count"] = task_line.split(":", 1)[1].strip()
                     if task_line.lower().startswith("tokdash session ids:"):
                         linked_ids = [item.strip() for item in task_line.split(":", 1)[1].split(",") if item.strip()]
                         break
@@ -62,6 +68,12 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
             task["session_ids"] = linked_ids
             task["tokens"] = max(0, int(snapshot["end_tokens"] - snapshot["start_tokens"])) if {"start_tokens", "end_tokens"} <= snapshot.keys() else None
             task["cost"] = max(0, snapshot["end_cost"] - snapshot["start_cost"]) if {"start_cost", "end_cost"} <= snapshot.keys() else None
+            task["duration_minutes"] = None
+            if task.get("started") and task.get("completed"):
+                try:
+                    task["duration_minutes"] = max(0, int((datetime.fromisoformat(task["completed"]) - datetime.fromisoformat(task["started"])).total_seconds() / 60))
+                except ValueError:
+                    pass
             rows.append(task)
     return rows
 

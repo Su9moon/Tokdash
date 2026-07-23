@@ -1166,6 +1166,16 @@ def adopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
     get_sessions_data.cache_clear()
     return {"path": str(project_dir), "managed": True}
 
+@app.post("/api/projects/unadopt")
+def unadopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove only Tokdash's onboarding marker; preserve project files and history."""
+    project_dir = Path(str(payload.get("path") or "")).expanduser().resolve()
+    marker = project_dir / ".tokdash-project.json"
+    if marker.exists():
+        marker.unlink()
+    get_projects_data.cache_clear()
+    return {"path": str(project_dir), "managed": False}
+
 
 @app.get("/projects", response_class=HTMLResponse)
 async def serve_projects_dashboard():

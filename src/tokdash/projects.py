@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 from .sessions import get_sessions_data
 
@@ -22,9 +23,17 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
         if len(cells) >= 4 and cells[0].startswith("TASK-"):
             task = {"id": cells[0], "title": cells[1], "status": cells[2], "started": cells[3]}
             task_file = project_dir / "tasks" / f"{task['id']}.md"
+            task["completed"] = ""
+            task["updated"] = ""
             linked_ids: list[str] = []
             if task_file.exists():
+                task["updated"] = datetime.fromtimestamp(task_file.stat().st_mtime, timezone.utc).isoformat()
                 for task_line in task_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                    lower = task_line.lower()
+                    if lower.startswith("completed:"):
+                        task["completed"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("updated:"):
+                        task["updated"] = task_line.split(":", 1)[1].strip()
                     if task_line.lower().startswith("tokdash session ids:"):
                         linked_ids = [item.strip() for item in task_line.split(":", 1)[1].split(",") if item.strip()]
                         break

@@ -1139,6 +1139,7 @@ def adopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
             encoding="utf-8",
         )
     get_projects_data.cache_clear()
+    get_sessions_data.cache_clear()
     return {"path": str(project_dir), "managed": True}
 
 

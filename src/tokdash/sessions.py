@@ -1538,6 +1538,7 @@ def _stored_sessions_for_tool(tool: str) -> Dict[str, Dict[str, Any]]:
     return sessions
 
 
+@lru_cache(maxsize=16)
 def get_sessions_data(
     tool: str,
     period: str,

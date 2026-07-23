@@ -8,6 +8,7 @@ import os
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -43,6 +44,8 @@ from .projects import get_projects_data
 
 PRICING_DB_PATH = Path(__file__).parent / "pricing_db.json"
 logger = logging.getLogger(__name__)
+_PROJECT_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_PROJECT_JOBS: dict[str, dict[str, Any]] = {}
 BASE_PATH_PLACEHOLDER = "__TOKDASH_BASE_PATH__"
 SUPPORTED_BASE_PATHS = ("/tokdash",)
 
@@ -1120,9 +1123,30 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
 def get_projects(period: str = "365", include_unmanaged: bool = False) -> Dict[str, Any]:
     """File-backed projects, tasks, and measured Codex session aggregates."""
     try:
-        return get_projects_data(period, include_unmanaged=include_unmanaged)
+        key = f"{period}:{include_unmanaged}"
+        job = _PROJECT_JOBS.get(key)
+        if job and not job["future"].done():
+            return {"loading": True, "job": key, "progress": job.get("progress", 10)}
+        if job and job["future"].done():
+            return job["future"].result()
+        future = _PROJECT_EXECUTOR.submit(get_projects_data, period, include_unmanaged)
+        _PROJECT_JOBS[key] = {"future": future, "progress": 10}
+        return {"loading": True, "job": key, "progress": 10}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/projects/status")
+def get_projects_status(job: str) -> Dict[str, Any]:
+    item = _PROJECT_JOBS.get(job)
+    if not item:
+        return {"loading": False, "error": "job not found"}
+    future = item["future"]
+    if not future.done():
+        return {"loading": True, "progress": 50}
+    try:
+        return {"loading": False, "data": future.result()}
+    except Exception as exc:
+        return {"loading": False, "error": str(exc)}
 
 @app.post("/api/projects/adopt")
 def adopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:

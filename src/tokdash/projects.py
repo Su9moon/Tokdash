@@ -129,7 +129,7 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
     known_dirs = _project_dirs()
     for session in sessions:
         session_path = Path(str(session.get("path") or "")).expanduser()
-        if session_path.is_dir() and (session_path / "TASKS.md").exists() and not (session_path / ".tokdash-disabled").exists() and session_path not in known_dirs:
+        if session_path.is_dir() and (session_path / "TASKS.md").exists() and session_path not in known_dirs:
             known_dirs.append(session_path)
 
     claimed: set[str] = set()
@@ -150,7 +150,8 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
                 "path": str(project_dir),
                 "aliases": sorted(aliases),
                 "context": (project_dir / "PROJECT_CONTEXT.md").exists(),
-                "managed": True,
+                "managed": not (project_dir / ".tokdash-disabled").exists(),
+                "adoption_status": "已关闭" if (project_dir / ".tokdash-disabled").exists() else "已接入",
                 "task_count": len(tasks),
                 "tasks": tasks,
                 "efficiency": {

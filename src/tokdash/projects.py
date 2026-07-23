@@ -20,8 +20,9 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
     rows: list[dict[str, str]] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) >= 4 and cells[0].startswith("TASK-"):
-            task = {"id": cells[0], "title": cells[1], "status": cells[2], "started": cells[3]}
+        if len(cells) >= 4 and (cells[0].startswith("TASK-") or (cells[0] and cells[0] not in {"编号", "ID", "---", "---"} and not set(cells[0]) <= {"-"})):
+            # Support both save-tokens' compact table and existing project indexes.
+            task = {"id": cells[0], "title": cells[1], "status": cells[3] if len(cells) >= 5 else cells[2], "started": cells[4] if len(cells) >= 6 else ""}
             task_file = project_dir / "tasks" / f"{task['id']}.md"
             task["completed"] = ""
             task["updated"] = ""

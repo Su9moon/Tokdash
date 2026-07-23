@@ -5,7 +5,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from .sessions import get_sessions_data
 
@@ -87,8 +87,14 @@ def _project_dirs() -> list[Path]:
 @lru_cache(maxsize=8)
 def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> dict[str, Any]:
     """Return managed projects plus every historical Codex session project."""
-    sessions_data = get_sessions_data("codex", period, None, None, include_review_sessions=True)
+    # Parse the Codex history once from the shared 365-day cache. Named periods
+    # are narrowed in memory, so switching 7/30/365 days never rescans JSONL.
+    sessions_data = get_sessions_data("codex", "365", None, None, include_review_sessions=True)
     sessions = sessions_data.get("sessions", [])
+    if period != "365":
+        days = int(period) if str(period).isdigit() else 365
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        sessions = [item for item in sessions if str(item.get("last_seen_at", "")) and datetime.fromisoformat(item["last_seen_at"].replace("Z", "+00:00")) >= cutoff]
     projects: list[dict[str, Any]] = []
 
     claimed: set[str] = set()

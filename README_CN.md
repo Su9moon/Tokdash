@@ -1,3 +1,25 @@
+# Tokdash · Codex 项目与工单增强版
+
+本项目基于 [Tokdash](https://github.com/JingbiaoMei/Tokdash) Fork，
+并针对 Codex 使用场景进行了本地增强。
+
+主要集成：
+
+- `save-tokens` Skill 的文件化任务记录
+- Codex 项目、会话与工单关联
+- Token、Token events、成本和用时统计
+- 返工与差评统计
+- 项目接入状态和工单效率看板
+- 手动刷新缓存，无需重启服务
+
+本项目保留 Tokdash 原有的 Token 统计能力，
+新增内容主要服务于 Codex 项目管理和低消耗工作流。
+
+
+
+
+
+
 <p align="center">
   <a href="README.md">English</a> &nbsp;|&nbsp; <a href="README_CN.md">中文</a>
 </p>

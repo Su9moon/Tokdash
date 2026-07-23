@@ -33,11 +33,12 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                     if index is not None and index < len(cells):
                         return cells[index]
                 return fallback
-            task = {"id": col("id", "编号", fallback=cells[0]), "title": col("task", "任务", "title", fallback=cells[1]), "status": col("status", "状态", fallback=cells[2]), "started": col("started", "开始", "started_at")}
+            task = {"id": col("id", "编号", fallback=cells[0]), "title": col("task", "任务", "title", fallback=cells[1]), "objective": col("objective", "目标"), "status": col("status", "状态", fallback=cells[2]), "started": col("started", "开始", "started_at")}
             task_file = project_dir / "tasks" / f"{task['id']}.md"
             task["completed"] = ""
             task["outcome"] = "unavailable"
             task["rework_count"] = "unavailable"
+            task["negative_rating_count"] = "unavailable"
             task["updated"] = ""
             linked_ids: list[str] = []
             if task_file.exists():
@@ -52,6 +53,8 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                         task["outcome"] = task_line.split(":", 1)[1].strip()
                     elif lower.startswith("rework count:"):
                         task["rework_count"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("negative rating count:"):
+                        task["negative_rating_count"] = task_line.split(":", 1)[1].strip()
                     if task_line.lower().startswith("tokdash session ids:"):
                         linked_ids = [item.strip() for item in task_line.split(":", 1)[1].split(",") if item.strip()]
                         break
@@ -144,6 +147,7 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
         measured_costs = [task["cost"] for task in tasks if task.get("cost") is not None]
         durations = [task["duration_minutes"] for task in tasks if task.get("duration_minutes") is not None]
         reworks = [int(task["rework_count"]) for task in tasks if str(task.get("rework_count", "")).isdigit()]
+        ratings = [int(task["negative_rating_count"]) for task in tasks if str(task.get("negative_rating_count", "")).isdigit()]
         projects.append(
             {
                 "name": project_dir.name,
@@ -157,11 +161,12 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
                 "efficiency": {
                     "task_count": len(valid_tasks),
                     "completed_count": len(completed_tasks),
-                    "completion_rate": (len(completed_tasks) / len(tasks)) if tasks else None,
+                    "completion_rate": (len(completed_tasks) / len(valid_tasks)) if valid_tasks else None,
                     "duration_minutes": sum(durations) if durations else None,
                     "tokens": sum(measured_tokens) if measured_tokens else None,
                     "cost": sum(measured_costs) if measured_costs else None,
                     "rework_count": sum(reworks) if reworks else None,
+                    "negative_rating_count": sum(ratings) if ratings else None,
                 },
                 "session_count": len(matched),
                 "tokens": sum(int(item.get("tokens") or 0) for item in matched),

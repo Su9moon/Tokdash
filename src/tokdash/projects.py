@@ -33,7 +33,7 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                     if index is not None and index < len(cells):
                         return cells[index]
                 return fallback
-            task = {"id": col("id", "编号", fallback=cells[0]), "title": col("task", "任务", "title", fallback=cells[1]), "objective": col("objective", "目标"), "status": col("status", "状态", fallback=cells[2]), "started": col("started", "开始", "started_at")}
+            task = {"id": col("id", "编号", fallback=cells[0]), "title": col("task", "任务", "title", fallback=cells[1]), "objective": col("objective", "目标"), "status": col("status", "状态", fallback=cells[2]), "started": col("started", "开始", "started_at"), "priority": col("priority", "优先级")}
             task_file = project_dir / "tasks" / f"{task['id']}.md"
             task["completed"] = ""
             task["outcome"] = "unavailable"
@@ -47,6 +47,12 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                     lower = task_line.lower()
                     if lower.startswith("completed:"):
                         task["completed"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("started:"):
+                        task["started"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("objective:"):
+                        task["objective"] = task_line.split(":", 1)[1].strip()
+                    elif lower.startswith("priority:"):
+                        task["priority"] = task_line.split(":", 1)[1].strip()
                     elif lower.startswith("updated:"):
                         task["updated"] = task_line.split(":", 1)[1].strip()
                     elif lower.startswith("outcome:"):
@@ -60,7 +66,7 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                         break
             snapshot: dict[str, float] = {}
             if task_file.exists():
-                labels = {"tokdash start tokens:": "start_tokens", "tokdash end tokens:": "end_tokens", "tokdash start cost:": "start_cost", "tokdash end cost:": "end_cost"}
+                labels = {"tokdash start tokens:": "start_tokens", "tokdash end tokens:": "end_tokens", "tokdash start cost:": "start_cost", "tokdash end cost:": "end_cost", "tokdash start token events:": "start_token_events", "tokdash end token events:": "end_token_events"}
                 for task_line in task_file.read_text(encoding="utf-8", errors="replace").splitlines():
                     for label, key in labels.items():
                         if task_line.lower().startswith(label):
@@ -71,10 +77,13 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
             task["session_ids"] = linked_ids
             task["tokens"] = max(0, int(snapshot["end_tokens"] - snapshot["start_tokens"])) if {"start_tokens", "end_tokens"} <= snapshot.keys() else None
             task["cost"] = max(0, snapshot["end_cost"] - snapshot["start_cost"]) if {"start_cost", "end_cost"} <= snapshot.keys() else None
+            task["token_events"] = max(0, int(snapshot["end_token_events"] - snapshot["start_token_events"])) if {"start_token_events", "end_token_events"} <= snapshot.keys() else None
             task["duration_minutes"] = None
             if task.get("started") and task.get("completed"):
                 try:
-                    task["duration_minutes"] = max(0, int((datetime.fromisoformat(task["completed"]) - datetime.fromisoformat(task["started"])).total_seconds() / 60))
+                    seconds = max(0, (datetime.fromisoformat(task["completed"]) - datetime.fromisoformat(task["started"])).total_seconds())
+                    task["duration_seconds"] = round(seconds, 1)
+                    task["duration_minutes"] = round(seconds / 60, 2)
                 except ValueError:
                     pass
             rows.append(task)
@@ -146,6 +155,7 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
         measured_tokens = [task["tokens"] for task in tasks if task.get("tokens") is not None]
         measured_costs = [task["cost"] for task in tasks if task.get("cost") is not None]
         durations = [task["duration_minutes"] for task in tasks if task.get("duration_minutes") is not None]
+        token_events = [task["token_events"] for task in tasks if task.get("token_events") is not None]
         reworks = [int(task["rework_count"]) for task in tasks if str(task.get("rework_count", "")).isdigit()]
         ratings = [int(task["negative_rating_count"]) for task in tasks if str(task.get("negative_rating_count", "")).isdigit()]
         projects.append(
@@ -154,8 +164,10 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
                 "path": str(project_dir),
                 "aliases": sorted(aliases),
                 "context": (project_dir / "PROJECT_CONTEXT.md").exists(),
-                "managed": not (project_dir / ".tokdash-disabled").exists(),
-                "adoption_status": "已关闭" if (project_dir / ".tokdash-disabled").exists() else "已接入",
+                # Adoption is a browser-only presentation state. Legacy marker
+                # files must never change whether a project is managed.
+                "managed": True,
+                "adoption_status": "已接入",
                 "task_count": len(tasks),
                 "tasks": tasks,
                 "efficiency": {
@@ -164,6 +176,7 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
                     "completion_rate": (len(completed_tasks) / len(valid_tasks)) if valid_tasks else None,
                     "duration_minutes": sum(durations) if durations else None,
                     "tokens": sum(measured_tokens) if measured_tokens else None,
+                    "token_events": sum(token_events) if token_events else None,
                     "cost": sum(measured_costs) if measured_costs else None,
                     "rework_count": sum(reworks) if reworks else None,
                     "negative_rating_count": sum(ratings) if ratings else None,

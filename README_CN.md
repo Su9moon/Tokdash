@@ -34,6 +34,17 @@
   <b>无需安装即可体验 → <a href="https://tokdash.github.io/demo/">tokdash.github.io/demo</a></b>
 </p>
 
+## 本地 Codex 项目与工单
+
+本地版本提供 `/projects` 页面，用于按项目查看 Codex 会话、业务流程工单和效率汇总。工单数据来自项目目录中的 `TASKS.md` 与 `tasks/TASK-xxx.md`，Token、成本和 `token_events` 仅使用 Tokdash 已索引的真实快照；缺失数据显示为 `-`，不会估算。
+
+- 默认显示已接入项目，可切换显示未接入或已关闭项目。
+- “重新载入”只在用户手动操作时清理项目缓存，不启用自动刷新，也不需要重启服务。
+- 工单表展示状态、开始/完成时间、用时、返工、差评、Token、Token events 和成本。
+- “启用 / SAVE-TOKENS”是只读提示；请在对应 Codex 对话中启用 `save-tokens` skill 后再建立工单。
+
+启动本地页面后访问 `http://127.0.0.1:55423/projects` 即可查看。
+
 <p align="center">
   <b>性能：冷启动使用量扫描比 0.6.0 之前快约 30×，在同一台机器的本地基准中比 ccusage 快 15×。</b>
 </p>

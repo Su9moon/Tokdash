@@ -1,0 +1,92 @@
+"""Local project/task aggregation for the optional Projects dashboard."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+from .sessions import get_sessions_data
+
+
+def _roots() -> list[Path]:
+    raw = os.environ.get("TOKDASH_PROJECT_ROOTS", "")
+    return [Path(item.strip()).expanduser() for item in raw.split(os.pathsep) if item.strip()]
+
+
+def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) >= 4 and cells[0].startswith("TASK-"):
+            task = {"id": cells[0], "title": cells[1], "status": cells[2], "started": cells[3]}
+            task_file = project_dir / "tasks" / f"{task['id']}.md"
+            linked_ids: list[str] = []
+            if task_file.exists():
+                for task_line in task_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if task_line.lower().startswith("tokdash session ids:"):
+                        linked_ids = [item.strip() for item in task_line.split(":", 1)[1].split(",") if item.strip()]
+                        break
+            linked = [item for item in sessions if item.get("session_id") in linked_ids]
+            task["session_ids"] = linked_ids
+            task["tokens"] = sum(int(item.get("tokens") or 0) for item in linked)
+            task["cost"] = sum(float(item.get("cost") or 0) for item in linked)
+            rows.append(task)
+    return rows
+
+
+def _aliases(project_dir: Path) -> set[str]:
+    names = {project_dir.name.lower()}
+    config = project_dir / ".tokdash-project.json"
+    if not config.exists():
+        return names
+    try:
+        import json
+        data = json.loads(config.read_text(encoding="utf-8"))
+        names.update(str(name).lower() for name in data.get("aliases", []) if str(name).strip())
+    except (OSError, ValueError, TypeError):
+        pass
+    return names
+
+
+def _project_dirs() -> list[Path]:
+    dirs: set[Path] = set()
+    for root in _roots():
+        if not root.is_dir():
+            continue
+        if (root / "TASKS.md").exists():
+            dirs.add(root)
+        for task_index in root.rglob("TASKS.md"):
+            # Ignore dependency/cache trees and avoid turning arbitrary task logs into projects.
+            if not {".git", "node_modules", ".venv", "vendor"}.intersection(task_index.parts):
+                dirs.add(task_index.parent)
+    return sorted(dirs, key=lambda item: item.name.lower())
+
+
+def get_projects_data(period: str = "365") -> dict[str, Any]:
+    """Return file-backed projects enriched with measured Codex session totals."""
+    sessions_data = get_sessions_data("codex", period, None, None, include_review_sessions=True)
+    sessions = sessions_data.get("sessions", [])
+    projects: list[dict[str, Any]] = []
+
+    for project_dir in _project_dirs():
+        aliases = _aliases(project_dir)
+        matched = [item for item in sessions if str(item.get("project", "")).lower() in aliases]
+        tasks = _task_rows(project_dir / "TASKS.md", project_dir, matched)
+        projects.append(
+            {
+                "name": project_dir.name,
+                "path": str(project_dir),
+                "aliases": sorted(aliases),
+                "context": (project_dir / "PROJECT_CONTEXT.md").exists(),
+                "task_count": len(tasks),
+                "tasks": tasks,
+                "session_count": len(matched),
+                "tokens": sum(int(item.get("tokens") or 0) for item in matched),
+                "cost": sum(float(item.get("cost") or 0) for item in matched),
+                "sessions": sorted(matched, key=lambda item: str(item.get("last_seen_at", "")), reverse=True),
+            }
+        )
+
+    return {"period": period, "roots": [str(item) for item in _roots()], "projects": projects}

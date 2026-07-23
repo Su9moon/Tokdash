@@ -38,6 +38,7 @@ from .sessions import (
     get_sessions_data,
     reload_pricing_db,
 )
+from .projects import get_projects_data
 
 
 PRICING_DB_PATH = Path(__file__).parent / "pricing_db.json"
@@ -1113,6 +1114,23 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects")
+def get_projects(period: str = "365") -> Dict[str, Any]:
+    """File-backed projects, tasks, and measured Codex session aggregates."""
+    try:
+        return get_projects_data(period)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/projects", response_class=HTMLResponse)
+async def serve_projects_dashboard():
+    page = STATIC_DIR / "projects.html"
+    if not page.exists():
+        return HTMLResponse(content="<h1>Projects dashboard not found</h1>", status_code=404)
+    return HTMLResponse(content=page.read_text(encoding="utf-8"), headers=NO_CACHE_HEADERS)
 
 
 @app.get("/health")

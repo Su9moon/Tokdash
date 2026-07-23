@@ -19,11 +19,21 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
     if not path.exists():
         return []
     rows: list[dict[str, str]] = []
+    headers: dict[str, int] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and any(cell.lower() in {"id", "编号", "task", "任务", "status", "状态", "started", "开始"} for cell in cells):
+            headers = {cell.lower(): index for index, cell in enumerate(cells)}
+            continue
         if len(cells) >= 4 and (cells[0].startswith("TASK-") or (cells[0] and cells[0] not in {"编号", "ID", "---", "---"} and not set(cells[0]) <= {"-"})):
             # Support both save-tokens' compact table and existing project indexes.
-            task = {"id": cells[0], "title": cells[1], "status": cells[3] if len(cells) >= 5 else cells[2], "started": cells[4] if len(cells) >= 6 else ""}
+            def col(*names: str, fallback: str = "") -> str:
+                for name in names:
+                    index = headers.get(name)
+                    if index is not None and index < len(cells):
+                        return cells[index]
+                return fallback
+            task = {"id": col("id", "编号", fallback=cells[0]), "title": col("task", "任务", "title", fallback=cells[1]), "status": col("status", "状态", fallback=cells[2]), "started": col("started", "开始", "started_at")}
             task_file = project_dir / "tasks" / f"{task['id']}.md"
             task["completed"] = ""
             task["updated"] = ""

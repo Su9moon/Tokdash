@@ -28,10 +28,19 @@ def _task_rows(path: Path, project_dir: Path, sessions: list[dict[str, Any]]) ->
                     if task_line.lower().startswith("tokdash session ids:"):
                         linked_ids = [item.strip() for item in task_line.split(":", 1)[1].split(",") if item.strip()]
                         break
-            linked = [item for item in sessions if item.get("session_id") in linked_ids]
+            snapshot: dict[str, float] = {}
+            if task_file.exists():
+                labels = {"tokdash start tokens:": "start_tokens", "tokdash end tokens:": "end_tokens", "tokdash start cost:": "start_cost", "tokdash end cost:": "end_cost"}
+                for task_line in task_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                    for label, key in labels.items():
+                        if task_line.lower().startswith(label):
+                            try:
+                                snapshot[key] = float(task_line.split(":", 1)[1].strip())
+                            except ValueError:
+                                pass
             task["session_ids"] = linked_ids
-            task["tokens"] = sum(int(item.get("tokens") or 0) for item in linked)
-            task["cost"] = sum(float(item.get("cost") or 0) for item in linked)
+            task["tokens"] = max(0, int(snapshot["end_tokens"] - snapshot["start_tokens"])) if {"start_tokens", "end_tokens"} <= snapshot.keys() else None
+            task["cost"] = max(0, snapshot["end_cost"] - snapshot["start_cost"]) if {"start_cost", "end_cost"} <= snapshot.keys() else None
             rows.append(task)
     return rows
 

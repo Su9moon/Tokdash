@@ -1120,9 +1120,15 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
 
 
 @app.get("/api/projects")
-def get_projects(period: str = "365", include_unmanaged: bool = False) -> Dict[str, Any]:
+def get_projects(period: str = "365", include_unmanaged: bool = False, refresh: bool = False) -> Dict[str, Any]:
     """File-backed projects, tasks, and measured Codex session aggregates."""
     try:
+        if refresh:
+            # The dashboard's manual reload must invalidate both the task
+            # parser and the in-flight/result job for this query.
+            get_projects_data.cache_clear()
+            get_sessions_data.cache_clear()
+            _PROJECT_JOBS.pop(f"{period}:{include_unmanaged}", None)
         key = f"{period}:{include_unmanaged}"
         job = _PROJECT_JOBS.get(key)
         if job and not job["future"].done():

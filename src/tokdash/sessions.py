@@ -559,7 +559,11 @@ def _load_codex_sessions(signature: tuple[tuple[str, int, int], ...], pricing_si
     for path_str, mtime_ns, size in signature:
         raw = _parse_codex_session_file(path_str, mtime_ns, size, pricing_sig)
         if raw:
-            sessions[str(raw["session_id"])] = raw
+            session_id = str(raw["session_id"])
+            if session_id in sessions:
+                sessions[session_id] = _merge_raw_session(sessions[session_id], raw)
+            else:
+                sessions[session_id] = raw
     return sessions
 
 
@@ -1460,9 +1464,11 @@ def _session_records_to_raw_sessions(tool: str, records: Iterable[Dict[str, Any]
         if not session_id:
             continue
         if tool == "codex":
-            # Match the live Codex loader: sorted files with the same session_id
-            # are not merged; the later record wins.
-            sessions[session_id] = raw
+            # A Codex task may have multiple rollout files after it is resumed or
+            # a subagent is spawned. Merge stable turn identities so historical
+            # usage is retained without counting an exact replay twice.
+            existing = sessions.get(session_id)
+            sessions[session_id] = _merge_raw_session(existing, raw) if existing else raw
             continue
 
         session = sessions.get(session_id)

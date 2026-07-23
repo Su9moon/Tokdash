@@ -74,13 +74,15 @@ def _project_dirs() -> list[Path]:
 
 
 def get_projects_data(period: str = "365") -> dict[str, Any]:
-    """Return file-backed projects enriched with measured Codex session totals."""
+    """Return managed projects plus every historical Codex session project."""
     sessions_data = get_sessions_data("codex", period, None, None, include_review_sessions=True)
     sessions = sessions_data.get("sessions", [])
     projects: list[dict[str, Any]] = []
 
+    claimed: set[str] = set()
     for project_dir in _project_dirs():
         aliases = _aliases(project_dir)
+        claimed.update(aliases)
         matched = [item for item in sessions if str(item.get("project", "")).lower() in aliases]
         tasks = _task_rows(project_dir / "TASKS.md", project_dir, matched)
         projects.append(
@@ -89,6 +91,7 @@ def get_projects_data(period: str = "365") -> dict[str, Any]:
                 "path": str(project_dir),
                 "aliases": sorted(aliases),
                 "context": (project_dir / "PROJECT_CONTEXT.md").exists(),
+                "managed": True,
                 "task_count": len(tasks),
                 "tasks": tasks,
                 "session_count": len(matched),
@@ -98,4 +101,27 @@ def get_projects_data(period: str = "365") -> dict[str, Any]:
             }
         )
 
+    unclaimed: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        name = str(session.get("project") or "未命名会话项目").strip() or "未命名会话项目"
+        if name.lower() not in claimed:
+            unclaimed.setdefault(name, []).append(session)
+    for name, matched in unclaimed.items():
+        projects.append(
+            {
+                "name": name,
+                "path": None,
+                "aliases": [name.lower()],
+                "context": False,
+                "managed": False,
+                "task_count": 0,
+                "tasks": [],
+                "session_count": len(matched),
+                "tokens": sum(int(item.get("tokens") or 0) for item in matched),
+                "cost": sum(float(item.get("cost") or 0) for item in matched),
+                "sessions": sorted(matched, key=lambda item: str(item.get("last_seen_at", "")), reverse=True),
+            }
+        )
+
+    projects.sort(key=lambda item: int(item["tokens"]), reverse=True)
     return {"period": period, "roots": [str(item) for item in _roots()], "projects": projects}

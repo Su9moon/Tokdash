@@ -124,8 +124,16 @@ def get_projects_data(period: str = "365", include_unmanaged: bool = False) -> d
         sessions = [item for item in sessions if str(item.get("last_seen_at", "")) and datetime.fromisoformat(item["last_seen_at"].replace("Z", "+00:00")) >= cutoff]
     projects: list[dict[str, Any]] = []
 
+    # Adopted projects may live outside the configured workspace roots. Trust
+    # only paths already recorded by Tokdash and containing an explicit TASKS.md.
+    known_dirs = _project_dirs()
+    for session in sessions:
+        session_path = Path(str(session.get("path") or "")).expanduser()
+        if session_path.is_dir() and (session_path / "TASKS.md").exists() and session_path not in known_dirs:
+            known_dirs.append(session_path)
+
     claimed: set[str] = set()
-    for project_dir in _project_dirs():
+    for project_dir in sorted(known_dirs, key=lambda item: item.name.lower()):
         aliases = _aliases(project_dir)
         claimed.update(aliases)
         matched = [item for item in sessions if str(item.get("project", "")).lower() in aliases]

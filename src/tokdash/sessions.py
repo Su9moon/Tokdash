@@ -265,6 +265,7 @@ def _summarize_session(
         "display_name": raw.get("display_name")
         or _fallback_display_name(raw.get("session_id", "unknown"), raw.get("project", "unknown")),
         "project": raw.get("project", "unknown"),
+        "path": raw.get("path", ""),
         "is_review_session": bool(raw.get("is_review_session", False)),
         "model": top_model,
         "token_events": len(turns),
@@ -548,6 +549,7 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
         "session_id": session_id,
         "display_name": thread_name or _fallback_display_name(session_id, project),
         "project": project,
+        "path": cwd,
         "is_review_session": is_review_session,
         "turns": turns,
     }

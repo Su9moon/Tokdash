@@ -1124,6 +1124,22 @@ def get_projects(period: str = "365") -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/projects/adopt")
+def adopt_project(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create the minimal file-backed onboarding marker for a selected project."""
+    from datetime import date
+    project_dir = Path(str(payload.get("path") or "")).expanduser().resolve()
+    if not project_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Project directory not found")
+    tasks = project_dir / "TASKS.md"
+    if not tasks.exists():
+        tasks.write_text(
+            "# Tasks\n\n| ID | Task | Status | Started | Report |\n| --- | --- | --- | --- | --- |\n"
+            f"| TASK-001 | Save-tokens onboarding | Active | {date.today().isoformat()} |  |\n",
+            encoding="utf-8",
+        )
+    return {"path": str(project_dir), "managed": True}
+
 
 @app.get("/projects", response_class=HTMLResponse)
 async def serve_projects_dashboard():

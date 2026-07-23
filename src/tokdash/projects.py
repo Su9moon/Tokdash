@@ -107,10 +107,12 @@ def get_projects_data(period: str = "365") -> dict[str, Any]:
         if name.lower() not in claimed:
             unclaimed.setdefault(name, []).append(session)
     for name, matched in unclaimed.items():
+        paths = {str(item.get("path") or "").strip() for item in matched}
+        project_path = next((item for item in paths if item), None)
         projects.append(
             {
                 "name": name,
-                "path": None,
+                "path": project_path,
                 "aliases": [name.lower()],
                 "context": False,
                 "managed": False,
